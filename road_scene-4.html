@@ -1,0 +1,1088 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bimble Road Scene</title>
+<style>
+:root{--bg:#0f140e;--panel:#172015;--line:#2a3a26;--ink:#e8f0de;--mut:#93a889;--acc:#a6d948}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+#wrap{position:relative;line-height:0}
+#hud{position:absolute;left:6px;top:6px;display:flex;flex-direction:column;gap:2px;pointer-events:none;font:600 12px/1.2 ui-monospace,Menlo,Consolas,monospace;color:#d8ff8a;text-shadow:0 1px 2px #000,0 0 3px #000}
+#scene{display:block;background:#2f5a1e;touch-action:manipulation}
+.panel{padding:10px 12px 24px;display:flex;flex-direction:column;gap:9px;max-width:980px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{background:#22301f;color:var(--ink);border:1px solid #38512f;border-radius:10px;padding:9px 12px;font:inherit;cursor:pointer}
+button:hover{background:#2c3f27}
+button:active{transform:translateY(1px)}
+button.pri{background:var(--acc);color:#16210a;border-color:var(--acc);font-weight:700}
+.speed{display:flex;align-items:center;gap:10px;flex:1 1 260px}
+.speed input{flex:1;accent-color:var(--acc);min-width:120px}
+output{min-width:34px;color:var(--mut);font-variant-numeric:tabular-nums;text-align:right}
+#msg{color:var(--acc);font-size:13px}
+details{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px}
+summary{cursor:pointer;color:var(--mut)}
+textarea{width:100%;margin-top:8px;background:#0c120b;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;resize:vertical}
+.hint{color:var(--mut);font-size:12px}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="scene"></canvas><div id="hud"><span id="fps">-- fps</span><span id="rms">-- ms</span></div></div>
+<div class="panel">
+  <div class="row">
+    <label class="speed">Scroll speed <input type="range" id="speed" min="0" max="600" value="140"><output id="speedO">140</output> px/s</label>
+    <button id="bPause">⏸ Pause</button>
+  </div>
+  <div class="row">
+    <label class="speed">Biome change <input type="range" id="biome" min="0" max="100" value="35"><output id="biomeO" style="min-width:92px">35</output></label>
+    <button id="bBiome">🗺️ Biomes</button>
+  </div>
+  <div class="hint" id="biomeNow"></div>
+  <div class="row">
+    <label class="speed">Walls <input type="range" id="walls" min="0" max="100" value="30"><output id="wallsO" style="min-width:34px">30</output></label>
+    <button id="bWalls">🧱 Walls</button>
+    <button id="bSides">↔ Sides: independent</button>
+  </div>
+  <div class="row">
+    <button id="bTrees">🌳 Trees</button>
+    <button id="bRoad">🛣️ Road texture</button>
+    <button id="bGrass">🌱 Grass</button>
+    <button id="bHedge">🌿 Hedge</button>
+    <button id="bBush">🌼 Bushes</button>
+    <button id="bAll">🎲 Everything</button>
+  </div>
+  <div class="row">
+    <button class="pri" id="bCopy">📋 Copy settings</button>
+    <span id="msg"></span>
+  </div>
+  <details id="det"><summary>Settings text (copy it manually if the button can't)</summary>
+    <textarea id="out" rows="16" readonly spellcheck="false"></textarea>
+  </details>
+  <div class="hint">Keys: <b>space</b> pause · <b>T</b> trees · <b>R</b> road · <b>G</b> grass · <b>H</b> hedge · <b>B</b> bushes · <b>M</b> biomes · <b>W</b> walls · <b>A</b> everything</div>
+</div>
+
+<script>
+'use strict';
+(()=>{
+// ================= constants & helpers =================
+const TAU=Math.PI*2, SH_ROOM=.11, VARIANTS=6, HS=2048, BAND=160, BUF=240, T=256, NH=8;
+const SHADOW_OFFSET=.075, SHADOW_ALPHA=.5, AX=.445, AY=.555;
+const L={x:-.7071,y:.7071};            // direction TOWARD the light (bottom-left)
+const lerp=(a,b,t)=>a+(b-a)*t, clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const smooth=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t);};
+const mk=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h==null?w:h;return c;};
+const hsla=(h,s,l,a)=>`hsla(${(((h%360)+360)%360).toFixed(1)},${clamp(s,0,100).toFixed(1)}%,${clamp(l,2,96).toFixed(1)}%,${a==null?1:a})`;
+const $=id=>document.getElementById(id);
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function ihash(x,y,s){let h=Math.imul(x|0,374761393)^Math.imul(y|0,668265263)^Math.imul(s|0,1274126177);h=Math.imul(h^(h>>>13),1274126177);return((h^(h>>>16))>>>0)/4294967296;}
+// periodic value noise: px/py = lattice period in x/y (0 = no wrap)
+function vnP(x,y,s,px,py){
+  const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-yi,u=xf*xf*(3-2*xf),v=yf*yf*(3-2*yf);
+  const wx=i=>px?((i%px)+px)%px:i, wy=j=>py?((j%py)+py)%py:j;
+  const a=ihash(wx(xi),wy(yi),s),b=ihash(wx(xi+1),wy(yi),s),c=ihash(wx(xi),wy(yi+1),s),d=ihash(wx(xi+1),wy(yi+1),s);
+  return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+}
+function fbP(x,y,s,o,px,py){let a=0,amp=.5,f=1,n=0;for(let i=0;i<o;i++){a+=amp*vnP(x*f,y*f,s+i*101,px?px*f:0,py?py*f:0);n+=amp;amp*=.5;f*=2;}return a/n;}
+const contrast=n=>clamp((n-.5)*1.8+.5,0,1);
+function hslToRgb(h,s,l){h=(((h%360)+360)%360)/360;s/=100;l/=100;const a=s*Math.min(l,1-l);const f=n=>{const k=(n+h*12)%12;return l-a*Math.max(-1,Math.min(k-3,9-k,1));};return[f(0)*255,f(8)*255,f(4)*255];}
+function mkLUT(h,s){const t=new Uint8Array(1001*3);for(let i=0;i<=1000;i++){const c=hslToRgb(h,s,i/10);t[i*3]=c[0];t[i*3+1]=c[1];t[i*3+2]=c[2];}return t;}
+
+// ================= foliage sprite painters (from Foliage Lab) =================
+function blob(ctx,x,y,r,rng,n){
+  n=n||11;const pts=[],ph=rng()*TAU;
+  for(let i=0;i<n;i++){const a=ph+i/n*TAU,rr=r*(.80+rng()*.34);pts.push([x+Math.cos(a)*rr,y+Math.sin(a)*rr]);}
+  ctx.beginPath();
+  for(let i=0;i<n;i++){
+    const p=pts[i],q=pts[(i+1)%n],mx=(p[0]+q[0])/2,my=(p[1]+q[1])/2;
+    if(i===0){const pr=pts[n-1];ctx.moveTo((pr[0]+p[0])/2,(pr[1]+p[1])/2);}
+    ctx.quadraticCurveTo(p[0],p[1],mx,my);
+  }
+  ctx.closePath();ctx.fill();
+}
+function leaf(ctx,x,y,len,ang,wf){
+  const c=Math.cos(ang),s=Math.sin(ang),w=len*wf;
+  ctx.beginPath();ctx.moveTo(x-c*len,y-s*len);
+  ctx.quadraticCurveTo(x-s*w,y+c*w,x+c*len,y+s*len);
+  ctx.quadraticCurveTo(x+s*w,y-c*w,x-c*len,y-s*len);
+  ctx.fill();
+}
+function frond(ctx,cx,cy,ang,b,len,w,wm){
+  const m=9,ca=Math.cos(ang),sa=Math.sin(ang);
+  ctx.beginPath();
+  for(let side=0;side<2;side++){
+    const sg=side?-1:1;
+    for(let j=0;j<=m;j++){
+      const jj=side?m-j:j,u=jj/m;
+      const wd=w*wm*(Math.sin(Math.PI*Math.pow(u,.7))*.9+.12*(1-u))*((jj&1)?.8:1);
+      const lx=b+(len-b)*u,ly=sg*wd,px=cx+ca*lx-sa*ly,py=cy+sa*lx+ca*ly;
+      if(side===0&&j===0)ctx.moveTo(px,py);else ctx.lineTo(px,py);
+    }
+  }
+  ctx.closePath();ctx.fill();
+}
+
+const SPECIES=[
+ {id:'oak',name:'Oak',cell:192,kind:'round',n:[41,52],cr:[.17,.28],hue:100,sat:52,lit:34,hueJit:6,aut:{h:30,s:62,l:38,hj:14},fill:[.84,1]},
+ {id:'beech',name:'Beech',cell:192,kind:'round',n:[50,63],cr:[.14,.24],hue:96,sat:44,lit:27,hueJit:5,aut:{h:22,s:58,l:32,hj:10},fill:[.80,.98]},
+ {id:'birch',name:'Silver birch',cell:192,kind:'round',n:[32,41],cr:[.12,.20],hue:82,sat:58,lit:42,hueJit:7,aut:{h:48,s:76,l:50,hj:10},fill:[.66,.86],gaps:.45},
+ {id:'conifer',name:'Scots pine',cell:192,kind:'conifer',hue:142,sat:36,lit:25,hueJit:4,fill:[.70,.92]},
+ {id:'hawthorn',name:'Hawthorn',cell:128,kind:'round',n:[25,32],cr:[.18,.28],hue:96,sat:50,lit:36,hueJit:6,aut:{h:14,s:58,l:38,hj:12},fill:[.78,1]},
+ {id:'gorse',name:'Gorse',cell:128,kind:'round',spiky:true,n:[31,40],cr:[.14,.22],hue:108,sat:38,lit:25,hueJit:5,fill:[.76,1],
+   flecks:[{seasons:['summer','autumn'],h:52,s:98,l:54,n:60,r:1.7}]},
+ {id:'bush',name:'Bush',cell:128,kind:'round',n:[22,29],cr:[.20,.30],hue:100,sat:56,lit:38,hueJit:7,aut:{h:38,s:55,l:38,hj:16},fill:[.62,.90]},
+ {id:'bramble',name:'Bramble',cell:128,kind:'round',spiky:true,n:[27,34],cr:[.15,.25],hue:106,sat:34,lit:23,hueJit:6,aut:{h:8,s:48,l:30,hj:12},fill:[.70,.96],
+   flecks:[{seasons:['summer','autumn'],h:285,s:40,l:16,n:26,r:1.7}]},
+ {id:'hedgeblob',name:'Hedge',cell:96,kind:'round',n:[8,12],cr:[.28,.46],hue:100,sat:50,lit:31,hueJit:6,aut:{h:62,s:46,l:30,hj:28},fill:[.82,.98]}
+];
+const SP={};SPECIES.forEach(s=>SP[s.id]=s);
+
+function clumpPal(sp,season,rng){
+  if(season==='autumn'&&sp.aut){const a=sp.aut;return{h:a.h+(rng()-.5)*2*a.hj,s:a.s+(rng()-.5)*10,l:a.l+(rng()-.5)*7};}
+  return{h:sp.hue+(rng()-.5)*2*sp.hueJit,s:sp.sat,l:sp.lit+(rng()-.5)*4};
+}
+function boxFor(S){const m=S*.04,sm=S*SH_ROOM,x0=m,x1=S-m-sm,y0=m+sm,y1=S-m;return{x0,x1,y0,y1,w:x1-x0,h:y1-y0,cx:(x0+x1)/2,cy:(y0+y1)/2};}
+function drawClump(ctx,c,sp,leafPx,oy){
+  const r=mulberry32(c.seed),x=c.px,y=c.py+oy,cr=c.pr,P=c.pal;
+  const bl=P.l+(c.h-.5)*10+c.ls*5;
+  const col=(dh,dl,ds)=>hsla(P.h+dh,P.s+ds,bl+dl,1);
+  const dk=col(-6,-12,5),md=col(0,0,0),lt=col(7,11,2),hi=col(13,21,-2);
+  ctx.fillStyle='rgba(6,20,6,.30)';blob(ctx,x+cr*.24,y-cr*.24,cr*1.04,r,11);
+  ctx.fillStyle=dk;blob(ctx,x,y,cr,r,11);
+  ctx.fillStyle=md;blob(ctx,x-cr*.15,y+cr*.15,cr*.86,r,11);
+  ctx.fillStyle=lt;blob(ctx,x-cr*.30,y+cr*.30,cr*.58,r,9);
+  if(c.h>.28||c.ls>.1){ctx.fillStyle=hi;blob(ctx,x-cr*.42,y+cr*.42,cr*.30,r,8);}
+  const lc=Math.round(cr*cr*(sp.spiky?.031:.020))+3;
+  for(let i=0;i<lc;i++){
+    const a=r()*TAU,d=Math.sqrt(r())*cr*.94,lx=x+Math.cos(a)*d,ly=y+Math.sin(a)*d;
+    const t=(Math.cos(a)*L.x+Math.sin(a)*L.y)*(.45+.55*d/cr),q=r();let f;
+    if(t>.3)f=q<.4?hi:lt;else if(t>-.25)f=q<.35?lt:(q<.8?md:dk);else f=q<.25?md:dk;
+    ctx.fillStyle=f;
+    leaf(ctx,lx,ly,leafPx*(.7+r()*.8)*(sp.spiky?1.5:1),a+(r()-.5)*1.5,sp.spiky?.2:.55);
+  }
+}
+function finish(ctx,S,box,rng){
+  ctx.globalCompositeOperation='source-atop';
+  const g=ctx.createLinearGradient(box.cx-box.w*.45,box.cy+box.h*.45,box.cx+box.w*.45,box.cy-box.h*.45);
+  g.addColorStop(0,'rgba(255,244,160,.17)');g.addColorStop(.5,'rgba(255,255,255,0)');g.addColorStop(1,'rgba(6,16,30,.30)');
+  ctx.fillStyle=g;ctx.fillRect(0,0,S,S);
+  const n=Math.round(S*S/94);
+  for(let i=0;i<n;i++){
+    const x=rng()*S,y=rng()*S,s=rng()<.2?2:1;
+    ctx.fillStyle=rng()<.45?'rgba(255,255,190,.12)':'rgba(0,18,0,.16)';ctx.fillRect(x,y,s,s);
+  }
+  ctx.globalCompositeOperation='source-over';
+}
+function flecks(ctx,sp,cl,S,season,rng){
+  for(const f of sp.flecks||[]){
+    if(!f.seasons.includes(season))continue;
+    for(let i=0;i<f.n;i++){
+      const c=cl[(rng()*cl.length)|0],a=rng()*TAU,d=Math.sqrt(rng())*c.pr*.8;
+      ctx.fillStyle=hsla(f.h+(rng()-.5)*10,f.s,f.l+(rng()-.5)*6,.95);
+      ctx.beginPath();ctx.arc(c.px+Math.cos(a)*d,c.py+Math.sin(a)*d,f.r*S/192*(.8+rng()*.5),0,TAU);ctx.fill();
+    }
+  }
+}
+function paintRound(ctx,S,sp,rng,season,box){
+  const n=Math.round(lerp(sp.n[0],sp.n[1],rng()));
+  const k1=2+((rng()*3)|0),p1=rng()*TAU,a1=.09+rng()*.09,k2=4+((rng()*3)|0),p2=rng()*TAU,a2=.04+rng()*.05;
+  const sx=.9+rng()*.2,sy=.9+rng()*.2,rad=th=>1+a1*Math.sin(k1*th+p1)+a2*Math.sin(k2*th+p2);
+  const cl=[];
+  for(let i=0;i<n;i++){
+    const th=rng()*TAU,d=Math.sqrt(rng()),rr=rad(th)*d*.80;
+    cl.push({x:Math.cos(th)*rr*sx,y:Math.sin(th)*rr*sy,cr:lerp(sp.cr[0],sp.cr[1],rng())*(1-.28*d),h:1-d*.8+rng()*.12,seed:(rng()*4294967296)>>>0});
+  }
+  const rn=Math.round(n*.38);
+  for(let i=0;i<rn;i++){
+    const th=(i+rng()*.6)/rn*TAU,rr=rad(th)*.92;
+    cl.push({x:Math.cos(th)*rr*sx,y:Math.sin(th)*rr*sy,cr:lerp(sp.cr[0],sp.cr[1],rng())*.95,h:.04+rng()*.2,seed:(rng()*4294967296)>>>0});
+  }
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(const c of cl){const e=c.cr*1.18;x0=Math.min(x0,c.x-e);x1=Math.max(x1,c.x+e);y0=Math.min(y0,c.y-e);y1=Math.max(y1,c.y+e);}
+  const fill=lerp(sp.fill[0],sp.fill[1],rng());
+  const k=Math.min(box.w/(x1-x0),box.h/(y1-y0))*fill;
+  const ox=box.cx-((x0+x1)/2)*k,oy=box.cy-((y0+y1)/2)*k;
+  for(const c of cl){
+    c.ls=clamp(c.x*L.x+c.y*L.y,-1,1);
+    c.px=ox+c.x*k;c.py=oy+c.y*k;c.pr=c.cr*k;c.pal=clumpPal(sp,season,rng);
+  }
+  cl.sort((a,b)=>a.h-b.h);
+  const leafPx=S*.021;
+  for(const c of cl)drawClump(ctx,c,sp,leafPx,0);
+  if(sp.gaps){
+    ctx.globalCompositeOperation='destination-out';ctx.fillStyle='#000';
+    const gn=Math.round(sp.gaps*S*.2);
+    for(let i=0;i<gn;i++){
+      const c=cl[(rng()*cl.length)|0];if(c.h<.25)continue;
+      const a=rng()*TAU,d=rng()*c.pr*.8;
+      blob(ctx,c.px+Math.cos(a)*d,c.py+Math.sin(a)*d,S*(.008+rng()*.016),rng,7);
+    }
+    ctx.globalCompositeOperation='source-over';
+  }
+  finish(ctx,S,box,rng);
+  flecks(ctx,sp,cl,S,season,rng);
+}
+function paintConifer(ctx,S,sp,rng,season,box){
+  const fill=lerp(sp.fill[0],sp.fill[1],rng()),R=Math.min(box.w,box.h)/2*fill,cx=box.cx,cy=box.cy;
+  const tiers=4,base=clumpPal(sp,season,rng);
+  for(let t=0;t<tiers;t++){
+    const f=t/(tiers-1),cnt=10-t+((rng()*2)|0),off=rng()*TAU,len0=R*(1-.62*f);
+    for(let i=0;i<cnt;i++){
+      const ang=off+i/cnt*TAU+(rng()-.5)*.28,len=len0*(.9+rng()*.16),w=len*(.27+rng()*.08);
+      const ls=Math.cos(ang)*L.x+Math.sin(ang)*L.y,bl=base.l+f*6+ls*5+(rng()-.5)*3,b=R*.04;
+      ctx.fillStyle='rgba(5,18,8,.24)';frond(ctx,cx+len*.04,cy-len*.04,ang,b,len,w,1.05);
+      ctx.fillStyle=hsla(base.h-6,base.s+5,bl-11);frond(ctx,cx,cy,ang,b,len,w,1);
+      ctx.fillStyle=hsla(base.h,base.s,bl);frond(ctx,cx,cy,ang,b,len*.95,w,.72);
+      if(ls>-.35){ctx.fillStyle=hsla(base.h+8,base.s+2,bl+11+ls*4);frond(ctx,cx,cy,ang,b,len*.84,w,.34);}
+      ctx.strokeStyle=hsla(base.h+10,base.s,bl+14,.45);ctx.lineWidth=1;ctx.beginPath();
+      ctx.moveTo(cx+Math.cos(ang)*b,cy+Math.sin(ang)*b);ctx.lineTo(cx+Math.cos(ang)*len*.9,cy+Math.sin(ang)*len*.9);ctx.stroke();
+    }
+  }
+  ctx.fillStyle=hsla(base.h+6,base.s,base.l+14);ctx.beginPath();ctx.arc(cx-R*.02,cy+R*.02,R*.07,0,TAU);ctx.fill();
+  finish(ctx,S,box,rng);
+}
+function makeSpriteSp(sp,idx,variant,baseSeed,season){
+  season=season||'summer';
+  const S=sp.cell,c=mk(S),ctx=c.getContext('2d');
+  const seed=(baseSeed*7919+idx*104729+variant*1299709+12345)>>>0,rng=mulberry32(seed),box=boxFor(S);
+  if(sp.kind==='conifer')paintConifer(ctx,S,sp,rng,season,box);
+  else paintRound(ctx,S,sp,rng,season,box);
+  return c;
+}
+function buildShadow(fol,S,offLen){
+  const sil=mk(S),sx=sil.getContext('2d');
+  sx.drawImage(fol,0,0);sx.globalCompositeOperation='source-in';sx.fillStyle='rgb(8,22,10)';sx.fillRect(0,0,S,S);
+  const sh=mk(S),g=sh.getContext('2d'),dx=.7071*offLen,dy=-.7071*offLen,q=S/192*1.8;
+  const jit=[[0,0],[1,0],[-1,0],[0,1],[0,-1],[.7,.7],[-.7,-.7]];
+  g.globalAlpha=.22;
+  for(const j of jit)g.drawImage(sil,dx+j[0]*q,dy+j[1]*q);
+  return sh;
+}
+function tweak(sp,seed){
+  const r=mulberry32(((seed*2654435761)+sp.id.length*977+sp.id.charCodeAt(0))>>>0);
+  const o=Object.assign({},sp,{hue:sp.hue+(r()-.5)*12,sat:sp.sat+(r()-.5)*8,lit:sp.lit+(r()-.5)*6});
+  if(sp.aut)o.aut=Object.assign({},sp.aut,{h:sp.aut.h+(r()-.5)*10});
+  return o;
+}
+function runSync(gen){let r;do{r=gen.next();}while(!r.done);return r.value;}
+function* setGen(ids,seed,season){            // generators yield between sprites so builds can be spread over many frames
+  const out={};
+  for(let i=0;i<ids.length;i++){
+    const id=ids[i],sp=tweak(SP[id],seed+i*31),list=[];
+    for(let v=0;v<VARIANTS;v++){const fol=makeSpriteSp(sp,i,v,seed,season);list.push({fol,sh:buildShadow(fol,sp.cell,sp.cell*SHADOW_OFFSET)});yield;}
+    out[id]={sp,list};
+  }
+  return out;
+}
+function* hedgeSetGen(seed,season){
+  const sp=tweak(SP.hedgeblob,seed),list=[];
+  for(let v=0;v<NH;v++){const fol=makeSpriteSp(sp,9,v,seed,season);list.push({fol,sh:buildShadow(fol,sp.cell,sp.cell*SHADOW_OFFSET)});yield;}
+  return{sp,list};
+}
+const buildSet=(ids,seed,season)=>runSync(setGen(ids,seed,season));
+const buildHedgeSet=(seed,season)=>runSync(hedgeSetGen(seed,season));
+
+// ================= road (tileable top-to-bottom) =================
+function makeRoad(seed,RW,HSz){
+  const rng=mulberry32(seed^0x5bd1e995);
+  const P={tarH:205+rng()*40,tarS:3+rng()*9,tarL:21+rng()*9,dirtH:24+rng()*12,dirtS:20+rng()*16,dirtL:33+rng()*9,
+    target:.40+rng()*.20,bias:0,ru:.34+rng()*.12,centre:rng()<.8,patches:4+((rng()*5)|0),cracks:12+((rng()*14)|0),puddles:(rng()*4)|0,per:3+((rng()*2)|0)};
+  P.gravH=30+rng()*14;P.gravS=4+rng()*6;P.gravL=52+rng()*8;P.gt=.22+rng()*.14;
+  const STEP=4,cw_=Math.ceil(RW/STEP)+2,ch_=HSz/STEP;
+  const Gf=new Float32Array(cw_*ch_),Mf=new Float32Array(cw_*ch_),Tf=new Float32Array(cw_*ch_),Df=new Float32Array(cw_*ch_);
+  const per=P.per,ny2=Math.round(HSz/90),s2=ny2/HSz,ny3=Math.round(HSz/170),s3=ny3/HSz,ny4=Math.round(HSz/120),s4=ny4/HSz,ny5=Math.round(HSz/300),s5=ny5/HSz;
+  let mSum=0,gSum=0;
+  for(let j=0;j<ch_;j++){
+    const y=j*STEP,g=contrast(fbP(7.3,y*per/HSz,seed+1,2,0,per));
+    for(let i=0;i<cw_;i++){
+      const x=i*STEP,uu=(x/RW-.5)*2,au=Math.abs(uu);
+      const n2=fbP(x*s2+11,y*s2,seed+5,3,0,ny2);
+      const raw=(g-.5)*1.25+(n2-.5)*.6+.46+.3*smooth(.55,1,au)+P.bias;
+      const idx=j*cw_+i;
+      Mf[idx]=raw;
+      Tf[idx]=fbP(x*s3+23,y*s3,seed+17,2,0,ny3);
+      Df[idx]=fbP(x*s4+37,y*s4,seed+29,2,0,ny4);
+      Gf[idx]=fbP(x*s5+53,y*s5,seed+41,3,0,ny5);
+    }
+  }
+  // normalise so every seed lands on its own 40-60% dirt share
+  {
+    const sorted=Float32Array.from(Mf).sort(),q=sorted[Math.floor((1-P.target)*(sorted.length-1))],shift=.51-q;
+    for(let i=0;i<Mf.length;i++){Mf[i]=smooth(.38,.64,Mf[i]+shift);mSum+=Mf[i];}
+  }
+  {
+    const sorted=Float32Array.from(Gf).sort(),q=sorted[Math.floor((1-P.gt)*(sorted.length-1))],shift=.5-q;
+    for(let i=0;i<Gf.length;i++){Gf[i]=smooth(.36,.64,Gf[i]+shift);gSum+=Gf[i];}
+  }
+  const rc=mk(RW,HSz),rg=rc.getContext('2d'),img=rg.createImageData(RW,HSz),d=img.data;
+  const tw=mkLUT(P.tarH+6,P.tarS+2),tcL=mkLUT(P.tarH-6,Math.max(0,P.tarS-2)),dw=mkLUT(P.dirtH+3,P.dirtS+4),dcL=mkLUT(P.dirtH-6,Math.max(0,P.dirtS-8));
+  const ru=P.ru,inv=1/(2*.12*.12),inv2=1/(2*.07*.07);
+  const gw=mkLUT(P.gravH,P.gravS),gc=mkLUT(P.gravH-8,P.gravS+5);
+  let o=0;
+  for(let y=0;y<HSz;y++){
+    const fy=y/STEP,j0=Math.floor(fy),wy=fy-j0,j1=(j0+1)%ch_,r0=j0*cw_,r1=j1*cw_;
+    for(let x=0;x<RW;x++){
+      const fx=x/STEP,i0=fx|0,wx=fx-i0,a=r0+i0,b=r1+i0;
+      const w00=(1-wx)*(1-wy),w10=wx*(1-wy),w01=(1-wx)*wy,w11=wx*wy;
+      const M0=Mf[a]*w00+Mf[a+1]*w10+Mf[b]*w01+Mf[b+1]*w11;
+      const Tt=clamp((Tf[a]*w00+Tf[a+1]*w10+Tf[b]*w01+Tf[b+1]*w11-.5)*2+.5,0,1);
+      const Dd=clamp((Df[a]*w00+Df[a+1]*w10+Df[b]*w01+Df[b+1]*w11-.5)*2+.5,0,1);
+      const au=Math.abs((x/RW-.5)*2);
+      const h=ihash(x,y,seed+3),hc=ihash(x,y,seed+9),hd=ihash(x>>1,y>>1,seed+13);
+      const Mp=clamp(M0+(hd-.5)*2.6*M0*(1-M0),0,1);
+      const edgeD=1-.12*smooth(.8,1,au),dd=(au-ru)*(au-ru);
+      let Lt=P.tarL+(Tt-.5)*7-Math.exp(-dd*inv)*3.5+(h-.5)*7;
+      if(hc>.965)Lt+=16;else if(hc<.03)Lt-=9;
+      Lt*=edgeD;
+      let Ld=P.dirtL+(Dd-.5)*11-Math.exp(-dd*inv2)*7+(h-.5)*9;
+      if(hc>.955)Ld+=14;else if(hc<.04)Ld-=12;
+      Ld*=edgeD;
+      const ti=clamp((Lt*10)|0,0,1000)*3,di=clamp((Ld*10)|0,0,1000)*3;
+      const tr=tw[ti]*(1-Tt)+tcL[ti]*Tt,tg=tw[ti+1]*(1-Tt)+tcL[ti+1]*Tt,tb=tw[ti+2]*(1-Tt)+tcL[ti+2]*Tt;
+      const dr=dw[di]*(1-Dd)+dcL[di]*Dd,dg=dw[di+1]*(1-Dd)+dcL[di+1]*Dd,db=dw[di+2]*(1-Dd)+dcL[di+2]*Dd;
+      let R0=tr+(dr-tr)*Mp,G0=tg+(dg-tg)*Mp,B0=tb+(db-tb)*Mp;
+      const Gg=Gf[a]*w00+Gf[a+1]*w10+Gf[b]*w01+Gf[b+1]*w11,Gp=clamp(Gg+(hd-.5)*2.4*Gg*(1-Gg),0,1);
+      if(Gp>.002){
+        const h2=ihash(x>>1,y>>1,seed+21);
+        let Lg=P.gravL+(Dd-.5)*8-Math.exp(-dd*inv)*5+(h-.5)*18;
+        if(h2>.9)Lg+=13;else if(h2<.07)Lg-=10;if(hc>.97)Lg+=16;
+        Lg*=edgeD;const gi=clamp((Lg*10)|0,0,1000)*3;
+        R0+=(gw[gi]*(1-Tt)+gc[gi]*Tt-R0)*Gp;G0+=(gw[gi+1]*(1-Tt)+gc[gi+1]*Tt-G0)*Gp;B0+=(gw[gi+2]*(1-Tt)+gc[gi+2]*Tt-B0)*Gp;
+      }
+      d[o]=R0;d[o+1]=G0;d[o+2]=B0;d[o+3]=255;o+=4;
+    }
+  }
+  rg.putImageData(img,0,0);
+  const Mat=(x,y)=>{
+    const fx=clamp(x/STEP,0,cw_-2.001),fy=(((y%HSz)+HSz)%HSz)/STEP,i0=fx|0,wx=fx-i0,j0=Math.floor(fy),wy=fy-j0,j1=(j0+1)%ch_;
+    const a=j0*cw_+i0,b=j1*cw_+i0;
+    return(Mf[a]*(1-wx)+Mf[a+1]*wx)*(1-wy)+(Mf[b]*(1-wx)+Mf[b+1]*wx)*wy;
+  };
+  const Gat=(x,y)=>{
+    const fx=clamp(x/STEP,0,cw_-2.001),fy=(((y%HSz)+HSz)%HSz)/STEP,i0=fx|0,wx=fx-i0,j0=Math.floor(fy),wy=fy-j0,j1=(j0+1)%ch_;
+    const a=j0*cw_+i0,b=j1*cw_+i0;
+    return(Gf[a]*(1-wx)+Gf[a+1]*wx)*(1-wy)+(Gf[b]*(1-wx)+Gf[b+1]*wx)*wy;
+  };
+  const r2=mulberry32(seed+77);
+  rg.lineCap='round';
+  for(let k=0;k<P.cracks;k++){
+    let x=0,y=0,ok=false;
+    for(let t=0;t<12&&!ok;t++){x=lerp(.05,.95,r2())*RW;y=r2()*HSz;ok=Mat(x,y)<.35&&Gat(x,y)<.25;}
+    if(!ok)continue;
+    const segs=6+((r2()*7)|0);let ang=Math.PI/2+(r2()-.5)*1.2;const pts=[[x,y]];
+    for(let i=0;i<segs;i++){const len=8+r2()*18;ang+=(r2()-.5)*.9;x+=Math.cos(ang)*len;y+=Math.sin(ang)*len;pts.push([x,y]);}
+    for(const dy of[-HSz,0,HSz]){
+      rg.strokeStyle='rgba(8,8,10,.55)';rg.lineWidth=1.1;rg.beginPath();
+      pts.forEach((p,i)=>i?rg.lineTo(p[0],p[1]+dy):rg.moveTo(p[0],p[1]+dy));rg.stroke();
+      rg.strokeStyle='rgba(255,255,255,.06)';rg.lineWidth=1;rg.beginPath();
+      pts.forEach((p,i)=>i?rg.lineTo(p[0]+1,p[1]+dy+1):rg.moveTo(p[0]+1,p[1]+dy+1));rg.stroke();
+    }
+  }
+  for(let k=0;k<P.patches;k++){
+    const x=lerp(.12,.88,r2())*RW,y=r2()*HSz;if(Mat(x,y)>.4||Gat(x,y)>.25)continue;
+    const w=RW*lerp(.15,.4,r2()),h=lerp(40,160,r2()),rot=(r2()-.5)*.08,tone=P.tarL+(r2()<.5?-4:4);
+    for(const dy of[-HSz,0,HSz]){
+      rg.save();rg.translate(x,y+dy);rg.rotate(rot);
+      rg.fillStyle=hsla(P.tarH,P.tarS+1,tone,.5);rg.fillRect(-w/2,-h/2,w,h);
+      rg.strokeStyle='rgba(0,0,0,.28)';rg.lineWidth=1.2;rg.strokeRect(-w/2,-h/2,w,h);rg.restore();
+    }
+  }
+  for(let k=0;k<700;k++){
+    const x=r2()*RW,y=r2()*HSz;if(Mat(x,y)<.55)continue;
+    const r=.8+r2()*1.8,light=r2()<.6;
+    for(const dy of[-HSz,0,HSz]){
+      rg.fillStyle='rgba(0,0,0,.28)';rg.beginPath();rg.ellipse(x+.8,y+dy+.8,r,r*.8,0,0,TAU);rg.fill();
+      rg.fillStyle=light?hsla(P.dirtH+4,18,58+r2()*8,.9):hsla(P.dirtH,20,28,.9);
+      rg.beginPath();rg.ellipse(x,y+dy,r,r*.8,0,0,TAU);rg.fill();
+    }
+  }
+  for(let k=0;k<900;k++){            // loose gravel chips
+    const x=r2()*RW,y=r2()*HSz;if(Gat(x,y)<.5)continue;
+    const r=.7+r2()*1.5,q=r2();
+    for(const dy of[-HSz,0,HSz]){
+      rg.fillStyle='rgba(0,0,0,.25)';rg.beginPath();rg.ellipse(x+.7,y+dy+.7,r,r*.8,0,0,TAU);rg.fill();
+      rg.fillStyle=q<.5?hsla(P.gravH,P.gravS,66+r2()*10,.9):(q<.8?hsla(P.gravH-6,P.gravS+4,40,.9):hsla(P.gravH+8,P.gravS+8,54,.9));
+      rg.beginPath();rg.ellipse(x,y+dy,r,r*.8,0,0,TAU);rg.fill();
+    }
+  }
+  for(let k=0;k<P.puddles;k++){
+    let x=0,y=0,ok=false;
+    for(let t=0;t<20&&!ok;t++){x=lerp(.18,.82,r2())*RW;y=r2()*HSz;ok=Mat(x,y)>.7;}
+    if(!ok)continue;
+    const rx=RW*lerp(.03,.08,r2()),ry=rx*lerp(1.4,2.6,r2());
+    for(const dy of[-HSz,0,HSz]){
+      rg.fillStyle='rgba(46,56,66,.5)';rg.beginPath();rg.ellipse(x,y+dy,rx,ry,0,0,TAU);rg.fill();
+      rg.fillStyle='rgba(190,205,220,.22)';rg.beginPath();rg.ellipse(x-rx*.25,y+dy-ry*.25,rx*.5,ry*.4,0,0,TAU);rg.fill();
+    }
+  }
+  if(P.centre){
+    const nd=Math.round(HSz/115),pd=HSz/nd,lw=clamp(RW/160,2,5);
+    for(let k=0;k<nd;k++){
+      const y=k*pd,m=Mat(RW/2,y+20),gm=Gat(RW/2,y+20);
+      if(m>.55||gm>.45||r2()<.12)continue;
+      rg.fillStyle=`rgba(235,235,222,${(.8*(1-smooth(.2,.55,m))*(1-smooth(.15,.45,gm))).toFixed(2)})`;
+      rg.fillRect(RW/2-lw/2,y,lw,40);
+    }
+  }
+  const seq=[];
+  for(let q=0;q<8;q++){
+    const m=Mat(RW/2,HSz-1-q*(HSz/8)),gv=Gat(RW/2,HSz-1-q*(HSz/8));
+    seq.push(gv>.5?'gravel':m<.2?'tarmac':m<.4?'worn tarmac':m<.6?'tarmac/dirt mix':m<.8?'dirt with gravel':'dirt');
+  }
+  return{canvas:rc,P,info:{dirtPct:Math.round(mSum/(cw_*ch_)*100),gravPct:Math.round(gSum/(cw_*ch_)*100),seq}};
+}
+
+// ================= ground tiles (one per biome) + verge strips =================
+function wrapDraw(x,y,m,fn){for(const dx of[-T,0,T])for(const dy of[-T,0,T]){const ox=x+dx,oy=y+dy;if(ox<-m||ox>T+m||oy<-m||oy>T+m)continue;fn(ox,oy);}}
+function* groundGen(B,idx,seed){
+  const sp=B.g,rng=mulberry32((seed^0x1234567)+idx*7919),sd=seed+idx*13,kind=sp.kind;
+  const G={h:sp.h+(rng()-.5)*8,s:sp.s+(rng()-.5)*8,l:sp.l+(rng()-.5)*4};
+  const c=mk(T),g=c.getContext('2d'),img=g.createImageData(T,T),d=img.data;
+  const pur=hslToRgb(292,24,34);
+  let o=0;
+  for(let y=0;y<T;y++){
+   if((y&15)===15)yield;
+   for(let x=0;x<T;x++){
+    const n1=contrast(fbP(x/T*4,y/T*4,sd,3,4,4)),n2=fbP(x/T*16,y/T*16,sd+7,2,16,16);
+    let hh=G.h+(n1-.5)*sp.dh,ss=G.s+(n2-.5)*14,ll=G.l+(n1-.5)*sp.dl+(n2-.5)*7;
+    if(kind==='plough'){const f=Math.sin((x/T*16+(fbP(x/T*2,y/T*2,sd+3,2,2,2)-.5)*2.2)*TAU);ll+=f*4.2;ss+=f*2;hh+=f*1.2;}
+    const rgb=hslToRgb(hh,ss,ll);
+    if(kind==='heath'){const hn=fbP(x/T*8,y/T*8,sd+5,2,8,8),m=smooth(.5,.85,hn)*.5;for(let k=0;k<3;k++)rgb[k]+=(pur[k]-rgb[k])*m;}
+    d[o]=rgb[0];d[o+1]=rgb[1];d[o+2]=rgb[2];d[o+3]=255;o+=4;
+   }
+  }
+  g.putImageData(img,0,0);g.lineCap='round';yield;
+  const bl={pine:.35,wood:1,autumn:.7,meadow:1,heath:.5,plough:0}[kind];
+  if(bl>0){
+    const pal=[{c:hsla(G.h+18,G.s+8,G.l+16,.5),lw:1.1},{c:hsla(G.h+4,G.s+2,G.l+4,.45),lw:1.2},{c:hsla(G.h-4,G.s-4,G.l-12,.55),lw:1.2},{c:hsla(G.h+36,G.s+4,G.l+12,.25),lw:1}];
+    const N=Math.floor(T*T/30/4*bl);
+    for(const p of pal){
+      yield;
+      g.strokeStyle=p.c;g.lineWidth=p.lw;g.beginPath();
+      for(let i=0;i<N;i++){
+        const x=rng()*T,y=rng()*T,a=-Math.PI/2+(rng()-.5)*1.3,len=3+rng()*6,bend=(rng()-.5)*3;
+        wrapDraw(x,y,14,(ox,oy)=>{g.moveTo(ox,oy);g.quadraticCurveTo(ox+Math.cos(a)*len*.5+bend,oy+Math.sin(a)*len*.5,ox+Math.cos(a)*len,oy+Math.sin(a)*len);});
+      }
+      g.stroke();
+    }
+  }
+  const blobs=(n,r0,r1,col,pts)=>{g.fillStyle=col;for(let i=0;i<n;i++){const x=rng()*T,y=rng()*T,r=r0+rng()*(r1-r0),sf=(rng()*4294967296)>>>0;wrapDraw(x,y,r*1.3,(ox,oy)=>blob(g,ox,oy,r,mulberry32(sf),pts||9));}};
+  const strokes=(n,l0,l1,col,lw)=>{g.strokeStyle=col;g.lineWidth=lw||1;g.beginPath();for(let i=0;i<n;i++){const x=rng()*T,y=rng()*T,a=rng()*TAU,len=l0+rng()*(l1-l0);wrapDraw(x,y,l1+2,(ox,oy)=>{g.moveTo(ox,oy);g.lineTo(ox+Math.cos(a)*len,oy+Math.sin(a)*len);});}g.stroke();};
+  const dots=(n,r0,r1,col)=>{for(let i=0;i<n;i++){const x=rng()*T,y=rng()*T,r=r0+rng()*(r1-r0);g.fillStyle=typeof col==='function'?col():col;wrapDraw(x,y,r+1,(ox,oy)=>{g.beginPath();g.arc(ox,oy,r,0,TAU);g.fill();});}};
+  const flower=()=>{const q=rng();return q<.5?'rgba(255,255,255,.9)':(q<.75?'rgba(255,224,60,.9)':(q<.9?'rgba(240,140,190,.9)':'rgba(120,150,235,.9)'));};
+  yield;
+  if(kind==='meadow'){dots(46,1,1.5,flower);}
+  else if(kind==='wood'){
+    blobs(16,14,34,hsla(G.h+4,G.s+4,G.l-9,.26),11);blobs(12,12,26,hsla(G.h+16,G.s+6,G.l+14,.13),11);dots(6,1,1.5,flower);
+  }else if(kind==='pine'){
+    blobs(14,10,24,hsla(G.h,G.s,G.l-7,.3),9);
+    strokes(240,2.5,5.5,hsla(28,38,30,.6));strokes(180,2.5,5.5,hsla(38,34,38,.5));strokes(160,2.5,5,hsla(24,30,16,.6));
+  }else if(kind==='autumn'){
+    blobs(10,12,28,hsla(30,45,22,.18),9);
+    const cols=[hsla(28,72,42,.95),hsla(40,78,48,.95),hsla(12,64,38,.95),hsla(50,72,50,.95),hsla(22,55,30,.95),hsla(30,40,22,.8)];
+    for(let i=0;i<340;i++){
+      const x=rng()*T,y=rng()*T,len=2+rng()*2.2,ang=rng()*TAU;g.fillStyle=cols[(rng()*cols.length)|0];
+      wrapDraw(x,y,6,(ox,oy)=>leaf(g,ox,oy,len,ang,.5));
+    }
+  }else if(kind==='plough'){
+    dots(260,1.2,3,hsla(G.h-2,G.s+4,G.l-9,.55));dots(200,1,2.4,hsla(G.h+3,G.s-2,G.l+9,.5));
+    dots(22,1,2,hsla(35,8,52,.9));dots(40,.6,1,hsla(95,40,32,.7));
+  }else if(kind==='heath'){
+    blobs(10,10,22,hsla(G.h,G.s+4,G.l-7,.25),9);
+    blobs(40,3,8,hsla(290,26,34,.9),7);blobs(30,3,7,hsla(300,30,42,.8),7);blobs(26,3,7,hsla(280,22,26,.9),7);
+    dots(18,.8,1.3,hsla(52,90,52,.95));strokes(120,5,9,hsla(30,45,32,.5),1.2);
+  }
+  return{canvas:c,info:G,kind,pm:null,pt:null};
+}
+function* vergeGen(seed,VW,HSz,inner,G){
+  const rng=mulberry32(seed),c=mk(VW,HSz),g=c.getContext('2d'),nyv=Math.round(HSz/200);
+  const cx=y=>VW/2+(fbP(3.1,y*nyv/HSz,seed+3,2,0,nyv)-.5)*VW*.35;
+  const hwf=y=>VW*(.24+.12*fbP(9.7,y*nyv*2/HSz,seed+4,2,0,nyv*2));
+  for(let y=0;y<HSz;y+=3){
+    if(y%240===0)yield;
+    const x=cx(y),r=hwf(y);
+    for(const dy of[-HSz,0,HSz]){
+      const yy=y+dy;if(yy<-r*1.5||yy>HSz+r*1.5)continue;
+      const rr=r*(.7+.5*rng()),ox=x+(rng()-.5)*r*.6;
+      g.fillStyle=hsla(G.h+2,G.s+4,G.l-4,.97);g.beginPath();g.arc(ox,yy,rr,0,TAU);g.fill();
+      g.fillStyle=hsla(G.h+8,G.s+8,G.l+8,.9);g.beginPath();g.arc(ox-rr*.15,yy+rr*.15,rr*.6,0,TAU);g.fill();
+    }
+  }
+  g.lineCap='round';
+  const pal=[{c:hsla(G.h+20,G.s+10,G.l+22,.6),lw:1.1},{c:hsla(G.h+8,G.s+8,G.l+12,.55),lw:1.2},{c:hsla(G.h-2,G.s,G.l-8,.6),lw:1.2},{c:hsla(G.h+36,G.s+6,G.l+18,.3),lw:1}];
+  const N=Math.floor(VW*HSz*.1/4);
+  for(const p of pal){
+    yield;
+    g.strokeStyle=p.c;g.lineWidth=p.lw;g.beginPath();
+    for(let i=0;i<N;i++){
+      const y=rng()*HSz,x=cx(y)+(rng()+rng()-1)*hwf(y)*1.3,a=-Math.PI/2+(rng()-.5)*1.3,len=3+rng()*6,bend=(rng()-.5)*3;
+      for(const dy of[-HSz,0,HSz]){
+        const oy=y+dy;if(oy<-12||oy>HSz+12)continue;
+        g.moveTo(x,oy);g.quadraticCurveTo(x+Math.cos(a)*len*.5+bend,oy+Math.sin(a)*len*.5,x+Math.cos(a)*len,oy+Math.sin(a)*len);
+      }
+    }
+    g.stroke();
+  }
+  g.fillStyle=hsla(32,22,52,.7);
+  for(let i=0;i<HSz/4;i++){
+    const y=rng()*HSz,x=cx(y)+inner*hwf(y)*(.9+.4*rng()),r=.7+rng()*1.1;
+    for(const dy of[-HSz,0,HSz]){const oy=y+dy;if(oy<-3||oy>HSz+3)continue;g.beginPath();g.arc(x,oy,r,0,TAU);g.fill();}
+  }
+  return c;
+}
+
+// ================= walls (brick / stone) =================
+const WHT=512;
+function rr(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+function makeWallTile(style,ww,sw,seed){
+  const W=ww+sw+2,c=mk(W,WHT),g=c.getContext('2d'),rng=mulberry32(seed^(style==='brick'?1953:3371));
+  const wrap=fn=>{for(const dy of[-WHT,0,WHT])fn(dy);};
+  const sg=g.createLinearGradient(ww+1,0,ww+1+sw,0);sg.addColorStop(0,'rgba(8,20,10,.34)');sg.addColorStop(1,'rgba(8,20,10,0)');
+  g.fillStyle=sg;g.fillRect(ww+1,0,sw+1,WHT);
+  g.save();g.beginPath();g.rect(1,0,ww,WHT);g.clip();
+  if(style==='brick'){
+    g.fillStyle=hsla(38,10,50,1);g.fillRect(1,0,ww,WHT);
+    const rows=Math.max(2,Math.round(ww/9)),bw=ww/rows,n=32,bl=WHT/n;
+    for(let r=0;r<rows;r++)for(let k=0;k<n;k++){
+      const x=1+r*bw+.7,w=bw-1.4,y=k*bl+(r&1?bl/2:0)+.7,h=bl-1.4;
+      const hh=6+rng()*10,ss=40+rng()*14,ll=33+rng()*14;
+      wrap(dy=>{
+        g.fillStyle=hsla(hh,ss,ll,1);g.fillRect(x,y+dy,w,h);
+        g.fillStyle='rgba(255,225,190,.20)';g.fillRect(x,y+dy+h-1.2,w,1.2);g.fillRect(x,y+dy,1.2,h);
+        g.fillStyle='rgba(0,0,0,.22)';g.fillRect(x,y+dy,w,1.1);g.fillRect(x+w-1.1,y+dy,1.1,h);
+      });
+    }
+  }else{
+    g.fillStyle=hsla(30,10,22,1);g.fillRect(1,0,ww,WHT);
+    const cut=1+ww*(.42+rng()*.16),lanes=[[1,cut],[cut,ww+1]];
+    for(const[x0,x1]of lanes){
+      const ls=[];let sum=0;while(sum<WHT){const L=9+rng()*14;ls.push(L);sum+=L;}
+      const k=WHT/sum;let y=0;
+      for(const L0 of ls){
+        const L=L0*k,x=x0+.9,w=x1-x0-1.8,yy=y+.9,h=L-1.8,hh=28+rng()*16,ss=5+rng()*9,ll=42+rng()*18;
+        wrap(dy=>{
+          const gr=g.createLinearGradient(x,yy+h+dy,x+w,yy+dy);gr.addColorStop(0,hsla(hh,ss,ll+7,1));gr.addColorStop(1,hsla(hh,ss,ll-6,1));
+          g.fillStyle=gr;rr(g,x,yy+dy,w,h,2.4);g.fill();g.strokeStyle='rgba(0,0,0,.4)';g.lineWidth=1;g.stroke();
+        });
+        y+=L;
+      }
+    }
+  }
+  for(let i=0;i<14;i++){const x=1+rng()*ww,y=rng()*WHT,r=2+rng()*5,sf=(rng()*4294967296)>>>0;g.fillStyle=hsla(92,38,30,.32);wrap(dy=>blob(g,x,y+dy,r,mulberry32(sf),7));}
+  const nd=Math.round(ww*WHT/18);
+  for(let i=0;i<nd;i++){g.fillStyle=rng()<.5?'rgba(255,255,230,.10)':'rgba(0,0,0,.12)';g.fillRect(1+rng()*ww,rng()*WHT,1,1);}
+  g.restore();
+  g.fillStyle='rgba(0,0,0,.35)';g.fillRect(1,0,1,WHT);
+  return c;
+}
+function makePillar(style,pw,sw,seed){
+  const c=mk(pw+sw+2,pw+2),g=c.getContext('2d'),rng=mulberry32(seed+5);
+  const sg=g.createLinearGradient(pw+1,0,pw+1+sw,0);sg.addColorStop(0,'rgba(8,20,10,.38)');sg.addColorStop(1,'rgba(8,20,10,0)');
+  g.fillStyle=sg;g.fillRect(pw+1,1,sw+1,pw);
+  g.fillStyle=style==='brick'?hsla(10,46,34,1):hsla(34,9,40,1);g.fillRect(1,1,pw,pw);
+  g.strokeStyle='rgba(0,0,0,.5)';g.lineWidth=1.2;g.strokeRect(1.5,1.5,pw-1,pw-1);
+  const m=pw*.14,x0=1+m,x1=pw+1-m;
+  g.fillStyle=hsla(34,8,58,1);g.fillRect(x0,x0,x1-x0,x1-x0);
+  g.fillStyle='rgba(255,244,210,.26)';g.beginPath();g.moveTo(x0,x0);g.lineTo(x0,x1);g.lineTo(x1,x1);g.closePath();g.fill();
+  g.fillStyle='rgba(0,0,0,.16)';g.beginPath();g.moveTo(x0,x0);g.lineTo(x1,x0);g.lineTo(x1,x1);g.closePath();g.fill();
+  g.strokeStyle='rgba(0,0,0,.4)';g.lineWidth=1;g.strokeRect(x0+.5,x0+.5,x1-x0-1,x1-x0-1);
+  for(let i=0;i<30;i++){g.fillStyle=rng()<.5?'rgba(255,255,230,.14)':'rgba(0,0,0,.16)';g.fillRect(x0+rng()*(x1-x0),x0+rng()*(x1-x0),1,1);}
+  return c;
+}
+
+// ================= biomes =================
+// g = ground tile recipe, v = verge colour, tw/bw = tree/bush species weights (oak,beech,birch,conifer / hawthorn,gorse,bush,bramble),
+// td/bd = tree/bush density relative to the base density
+const BIOMES=[
+ {id:'pine',name:'Pine forest',season:'summer',td:1,bd:.55,tw:[0,0,2,30],bw:[2,5,3,6],g:{kind:'pine',h:92,s:26,l:19,dh:16,dl:9},v:{h:94,s:30,l:25}},
+ {id:'wood',name:'Broadleaf wood',season:'summer',td:.9,bd:1,tw:[20,16,8,2],bw:[12,3,10,10],g:{kind:'wood',h:100,s:44,l:24,dh:20,dl:12},v:{h:100,s:46,l:31}},
+ {id:'autumn',name:'Autumn woodland',season:'autumn',td:.85,bd:1,tw:[16,14,12,1],bw:[10,2,10,10],g:{kind:'autumn',h:66,s:34,l:28,dh:26,dl:12},v:{h:62,s:40,l:35}},
+ {id:'meadow',name:'Grassland fields',season:'summer',td:.14,bd:.8,tw:[10,6,6,1],bw:[10,6,10,6],g:{kind:'meadow',h:92,s:50,l:31,dh:22,dl:14},v:{h:92,s:52,l:38}},
+ {id:'plough',name:'Ploughed field',season:'summer',td:.07,bd:.15,tw:[10,6,4,0],bw:[4,1,6,2],g:{kind:'plough',h:28,s:32,l:25,dh:12,dl:10},v:{h:88,s:38,l:30}},
+ {id:'heath',name:'Heath and moor',season:'summer',td:.12,bd:1.7,tw:[3,1,6,6],bw:[2,28,2,8],g:{kind:'heath',h:78,s:24,l:28,dh:30,dl:10},v:{h:84,s:30,l:32}}
+];
+const ADJ=[[1,5,2],[0,2,3],[1,3,5,4],[1,4,5,2],[3,2,5],[0,3,2,4]];   // which biomes sit next to which
+
+// ================= state, layout =================
+const cv=$('scene'),ctx=cv.getContext('2d');
+const tcv=document.createElement('canvas'),tc=tcv.getContext('2d');
+const state={seeds:{road:0,grass:0,hedge:0,trees:0,bushes:0,biomes:0,walls:0}};
+let speed=140,paused=false,scroll=0,curS=0,dpr=1,cw=0,ch=0,u=1,roadW=0,roadL=0,roadR=0,vw=0,hw=0,hedgeOL=0,hedgeOR=0,lxv=0,rxv=0;
+let road=null,maskC=null;
+const GROUPS={
+  trees:{ids:['oak','beech','birch','conifer'],z:[3,3,2.6,3.2],dens:1,max:1,cell:192,wk:'tw',dk:'td'},
+  bushes:{ids:['hawthorn','gorse','bush','bramble'],z:[1.5,1.2,1,1.1],dens:.55,max:1.7,cell:128,wk:'bw',dk:'bd'}
+};
+const rnd=()=>Math.floor(Math.random()*1e6);
+const cache={ground:{},verge:{},sets:{trees:{},bushes:{},hedge:{}}},epoch={ground:0,trees:0,bushes:0,hedge:0};
+const makeGroundTile=(B,i,sd)=>runSync(groundGen(B,i,sd)),makeVerge=(...a)=>runSync(vergeGen(...a));
+
+function makeMask(){          // ragged 1->0 alpha ramp used to cross-fade two biomes (top = new biome)
+  const MW=Math.ceil(cw/2),MH=256,c=mk(MW,MH),g=c.getContext('2d'),img=g.createImageData(MW,MH),d=img.data;
+  let o=0;
+  for(let y=0;y<MH;y++){
+    const f=1-y/(MH-1),env=Math.pow(Math.sin(Math.PI*f),.7);
+    for(let x=0;x<MW;x++){
+      const n=fbP(x*2/60+3.1,y*2.4/60+7.7,991,3);
+      const q=f+(n-.5)*2.2*env+(ihash(x,y,5)-.5)*.1*env;
+      d[o]=255;d[o+1]=255;d[o+2]=255;d[o+3]=smooth(.42,.58,q)*255;o+=4;
+    }
+  }
+  g.putImageData(img,0,0);return c;
+}
+function layout(){
+  cw=Math.max(240,document.documentElement.clientWidth||innerWidth);
+  ch=Math.max(160,Math.floor(innerHeight/2));
+  dpr=Math.min(2,window.devicePixelRatio||1);
+  cv.width=Math.round(cw*dpr);cv.height=Math.round(ch*dpr);
+  cv.style.width=cw+'px';cv.style.height=ch+'px';
+  u=clamp(cw/900,.45,1.35);
+  roadW=Math.round(cw*.5);roadL=Math.round((cw-roadW)/2);roadR=roadL+roadW;
+  vw=Math.round(clamp(cw*.028,10,40));hw=Math.round(clamp(cw*.045,18,70));
+  hedgeOL=roadL-vw-hw;hedgeOR=roadR+vw+hw;
+  lxv=Math.round(roadL-vw*1.5);rxv=Math.round(roadR-vw*.5);
+  tcv.width=cv.width;tcv.height=cv.height;maskC=makeMask();
+  CHD=Math.round(CHUNK_USER*dpr);clearChunks(true);
+}
+
+// ================= biome plan (segments along the road) =================
+// Segment i covers world distance (prev.end, end]. Around each boundary there is a transition zone of length t (t/2 each side).
+let bioRate=35,segs=[],segRng=mulberry32(1);
+const BA={a:0,b:0,w:0};
+const segLen=()=>9000*Math.pow(900/9000,bioRate/100);
+const tFor=L=>Math.round(clamp(L*.55,350,900));
+const qMax=()=>(Math.floor(scroll*dpr)+cv.height+2*CHD)/dpr+420;       // nothing beyond this distance is ever read (chunks are drawn up to 2 chunks ahead)
+const pickNext=id=>{const a=ADJ[id];return a[(segRng()*a.length)|0];};
+function fillEnd(seg,prev,minTop){
+  if(bioRate===0){seg.end=Infinity;seg.t=700;return;}
+  const Ls=segLen(),t=tFor(Ls),pt=prev?prev.t:0,base=prev?seg.start:0;
+  let len=Math.max(Ls*(.7+segRng()*.6),(pt+t)/2+250);
+  seg.t=t;seg.end=Math.round(base+len);
+  if(minTop!=null)seg.end=Math.max(seg.end,Math.ceil(minTop+t/2+20));
+}
+function initSegs(){
+  segRng=mulberry32(state.seeds.biomes);
+  const first={id:(segRng()*BIOMES.length)|0,start:-1e7,end:0,t:0,flip:false};
+  fillEnd(first,null,qMax());segs=[first];ensureSegs();
+}
+function ensureSegs(){
+  const q=qMax();let g=0;
+  for(;;){
+    const last=segs[segs.length-1];
+    if(!(last.end-last.t/2<q)||g++>60)break;
+    const n={id:pickNext(last.id),start:last.end,end:0,t:0,flip:segRng()<.5};
+    fillEnd(n,last);segs.push(n);
+  }
+  const si=Math.floor(scroll);
+  while(segs.length>3&&segs[0].end+segs[0].t/2<si-600)segs.shift();
+}
+function retarget(force){            // slider/button changes only ever touch the unseen part of the plan
+  ensureSegs();
+  const last=segs[segs.length-1],prev=segs[segs.length-2],q=qMax(),pt=prev?prev.t:0;
+  const floorTop=Math.max(q,last.start+pt/2);
+  if(force){
+    const t=bioRate===0?700:tFor(segLen());
+    last.t=t;last.end=Math.ceil(Math.max(floorTop+t/2+20,last.start+(pt+t)/2+150));
+    ensureSegs();invalidateAhead();return;
+  }
+  fillEnd(last,prev,floorTop);ensureSegs();invalidateAhead();
+}
+function biomeAt(p){
+  for(let i=0;i<segs.length;i++){
+    const sg=segs[i],hi=sg.end+sg.t/2;
+    if(p<hi||i===segs.length-1){
+      BA.a=sg.id;BA.b=sg.id;BA.w=0;
+      const lo=sg.end-sg.t/2;
+      if(p>lo&&i<segs.length-1){BA.b=segs[i+1].id;BA.w=smooth(lo,hi,p);}
+      return BA;
+    }
+  }
+  return BA;
+}
+
+// ================= asset caches (built lazily, warmed ahead of time) =================
+function getGround(i){return cache.ground[i]||(cache.ground[i]=makeGroundTile(BIOMES[i],i,state.seeds.grass));}
+function vergeParams(i){const v=BIOMES[i].v,r=mulberry32(state.seeds.grass+i*31);return{sd:state.seeds.grass+i*10,G:{h:v.h+(r()-.5)*8,s:v.s+(r()-.5)*8,l:v.l+(r()-.5)*4}};}
+function getVerge(i){
+  if(cache.verge[i])return cache.verge[i];
+  const{sd,G}=vergeParams(i);
+  return cache.verge[i]={L:makeVerge(sd+1,vw*2,HS,1,G),R:makeVerge(sd+2,vw*2,HS,-1,G)};
+}
+function getSet(kind,season){
+  const c=cache.sets[kind];
+  return c[season]||(c[season]=kind==='hedge'?buildHedgeSet(state.seeds.hedge,season):buildSet(GROUPS[kind].ids,state.seeds[kind],season));
+}
+// ---- background warm-up: every biome's assets are built a little each frame, never in one long block
+const warmQ=[];let warmCur=null;
+function* wGround(i){const ep=epoch.ground;if(cache.ground[i])return;const g=yield* groundGen(BIOMES[i],i,state.seeds.grass);if(ep===epoch.ground&&!cache.ground[i])cache.ground[i]=g;}
+function* wVerge(i){
+  const ep=epoch.ground;if(cache.verge[i])return;const{sd,G}=vergeParams(i);
+  const L=yield* vergeGen(sd+1,vw*2,HS,1,G),R=yield* vergeGen(sd+2,vw*2,HS,-1,G);
+  if(ep===epoch.ground&&!cache.verge[i])cache.verge[i]={L,R};
+}
+function* wSet(kind,season){
+  const ep=epoch[kind];if(cache.sets[kind][season])return;
+  const r=yield* (kind==='hedge'?hedgeSetGen(state.seeds.hedge,season):setGen(GROUPS[kind].ids,state.seeds[kind],season));
+  if(ep===epoch[kind]&&!cache.sets[kind][season])cache.sets[kind][season]=r;
+}
+function queueWarm(kind){
+  const order=BIOMES.map((B,i)=>i);
+  if(kind==='ground')for(const i of order){warmQ.push(()=>wGround(i),()=>wVerge(i));}
+  else for(const se of['summer','autumn'])warmQ.push(()=>wSet(kind,se));
+}
+function pump(ms){
+  const t0=performance.now();
+  do{
+    if(!warmCur){const f=warmQ.shift();if(!f)return;warmCur=f();}
+    try{if(warmCur.next().done)warmCur=null;}catch(e){console.error(e);warmCur=null;}
+  }while(performance.now()-t0<ms);
+}
+const liveSegs=fn=>{for(const sg of segs)fn(BIOMES[sg.id],sg);};
+function genRoad(){road=makeRoad(state.seeds.road,roadW,HS);}
+function genGrass(){epoch.ground++;cache.ground={};cache.verge={};liveSegs((B,sg)=>{getGround(sg.id);getVerge(sg.id);});queueWarm('ground');}
+function genHedge(){epoch.hedge++;cache.sets.hedge={};clearChunks();liveSegs(B=>getSet('hedge',B.season));queueWarm('hedge');}
+function genTrees(){epoch.trees++;cache.sets.trees={};clearChunks();liveSegs(B=>getSet('trees',B.season));queueWarm('trees');}
+function genBushes(){epoch.bushes++;cache.sets.bushes={};clearChunks();liveSegs(B=>getSet('bushes',B.season));queueWarm('bushes');}
+let walls=null,wallShare=.21,wallTogether=false;
+const wallRuns=[[],[]],wallCells=new Map(),WC=900,RZ=180;
+function genWalls(){
+  const ww=Math.round(clamp(hw*.5,9,34)),sw=Math.round(ww*.7),pw=Math.round(ww*1.4),sd=state.seeds.walls;
+  walls={ww,sw,pw,tiles:{brick:makeWallTile('brick',ww,sw,sd),stone:makeWallTile('stone',ww,sw,sd)},pill:{brick:makePillar('brick',pw,sw,sd),stone:makePillar('stone',pw,sw,sd)}};
+  wallCells.clear();
+}
+function wallOn(c,sd){          // decided once per cell, when first looked at, so the slider never changes what is already placed
+  const key=sd+':'+c;let v=wallCells.get(key);
+  if(v===undefined){v=ihash(c,77+sd,state.seeds.walls)<wallShare;wallCells.set(key,v);}
+  return v;
+}
+function computeRuns(si,lo,hi){
+  if(wallCells.size>400){const cut=Math.floor((si-4000)/WC);for(const k of[...wallCells.keys()])if(+k.split(':')[1]<cut)wallCells.delete(k);}
+  for(let side=0;side<2;side++){
+    const sd=wallTogether?0:side,out=wallRuns[side];out.length=0;
+    let c=Math.floor(lo/WC),g=0;
+    if(wallShare>0)while(wallOn(c-1,sd)&&g++<10)c--;
+    const cEnd=Math.floor(hi/WC),sdd=state.seeds.walls;
+    while(wallShare>0&&c<=cEnd){
+      if(wallOn(c,sd)){
+        const cs=c;while(wallOn(c+1,sd)&&c-cs<10)c++;
+        out.push({a:cs*WC+WC*(.1+.4*ihash(cs,90+sd,sdd)),b:(c+1)*WC-WC*(.1+.4*ihash(c,91+sd,sdd)),style:ihash(cs,92+sd,sdd)<.5?'brick':'stone'});
+      }
+      c++;
+    }
+  }
+}
+function hedgeKeep(side,p,r){    // hedge thins out towards a wall and is gone along it
+  for(const w of wallRuns[side]){
+    if(p<w.a-RZ||p>w.b+RZ)continue;
+    if(p>=w.a&&p<=w.b)return false;
+    return r<(p<w.a?w.a-p:p-w.b)/RZ;
+  }
+  return true;
+}
+function drawWalls(si){
+  const W=walls;
+  for(let side=0;side<2;side++){
+    const cxm=side?hedgeOR-hw/2:hedgeOL+hw/2,x0=Math.round(cxm-W.ww/2)-1;
+    for(const r of wallRuns[side]){
+      if(r.b<si-120||r.a>si+ch+120)continue;
+      const t=W.tiles[r.style],yT=Math.max(0,Math.round(ch-(r.b-si))),yB=Math.min(ch,Math.round(ch-(r.a-si)));
+      if(yB>yT){
+        ctx.save();ctx.beginPath();ctx.rect(x0,yT,t.width,yB-yT);ctx.clip();
+        for(let k=Math.floor(r.a/WHT);k<=Math.floor(r.b/WHT);k++)ctx.drawImage(t,x0,ch-((k+1)*WHT-si));
+        ctx.restore();
+      }
+      const pil=W.pill[r.style],px=Math.round(cxm-W.pw/2)-1;
+      const pillar=p=>{const y=Math.round(ch-(p-si)-W.pw/2)-1;if(y>-W.pw-4&&y<ch+4)ctx.drawImage(pil,px,y);};
+      pillar(r.a);pillar(r.b);
+      for(let p=r.a+640;p<r.b-200;p+=640)pillar(p);
+    }
+  }
+}
+function genAll(){layout();genRoad();genGrass();genHedge();genTrees();genBushes();genWalls();refreshText();}
+
+// ================= drawing =================
+// Foliage (hedge, bushes, trees and their shadows) is pre-drawn into tall transparent chunks a little at a time, so each frame only blits a few images.
+const CHUNK_USER=320;let CHD=0;
+const chunks=new Map(),pool=[];
+function hedgeRange(p0,p1,out){
+  const D=hw*1.45,step=D*.4,seed=state.seeds.hedge,k0=Math.floor((p0-D)/step),k1=Math.ceil((p1+D)/step);
+  for(let side=0;side<2;side++){
+    const cxm=side?hedgeOR-hw/2:hedgeOL+hw/2;
+    for(let lane=0;lane<2;lane++)for(let k=k0;k<=k1;k++){
+      const key=k*2+lane,f=n=>ihash(key,side*8+n,seed);
+      const p=(k+lane*.5)*step+(f(3)-.5)*step*.6;
+      if(p<p0-D||p>p1+D)continue;
+      if(!hedgeKeep(side,p,f(5)))continue;
+      biomeAt(p);const B=BIOMES[f(6)<BA.w?BA.b:BA.a],hs=getSet('hedge',B.season);
+      out.push({spr:hs.list[(f(1)*NH)|0],x:cxm+(lane?1:-1)*hw*.1+(f(2)-.5)*hw*.3,p,size:D*(.85+f(4)*.3),z:1});
+    }
+  }
+}
+function scatterRange(kind,p0,p1,out){
+  const g=GROUPS[kind],seed=state.seeds[kind];
+  const avg=g.cell*u*.62,maxD=g.cell*u*1.2;
+  const b0=Math.floor((p0-maxD)/BAND),b1=Math.floor((p1+maxD)/BAND);
+  for(let b=b0;b<=b1;b++)for(let side=0;side<2;side++){
+    const outer=side?cw-hedgeOR:hedgeOL;
+    const e=g.dens*g.max*Math.max(outer+avg*.3,avg*.5)*BAND/(avg*avg);
+    let n=Math.floor(e);if(ihash(b,side+50,seed)<e-n)n++;
+    for(let i=0;i<n;i++){
+      const k=b*64+i,h=f=>ihash(k,side*16+f,seed);
+      const p=b*BAND+h(4)*BAND;
+      if(p<p0-maxD||p>p1+maxD)continue;
+      biomeAt(p);const B=BIOMES[h(8)<BA.w?BA.b:BA.a];     // each plant picks one of the two biomes it sits between
+      if(h(7)*g.max>=B[g.dk])continue;                    // thinning = biome density
+      const wts=B[g.wk];let tot=0;for(const w of wts)tot+=w;
+      let q=h(1)*tot,si=0;for(;si<g.ids.length-1;si++){q-=wts[si];if(q<0)break;}
+      const ent=getSet(kind,B.season)[g.ids[si]];
+      const size=ent.sp.cell*u*(.85+h(3)*.3),xin=lerp(-.25*size,outer-.12*size,h(5)),x=side?cw-xin:xin;
+      if(x+size*.6<0||x-size*.6>cw)continue;
+      out.push({spr:ent.list[(h(2)*VARIANTS)|0],x,p,size,z:g.z[si]});
+    }
+  }
+}
+function releaseChunk(c){if(c.canvas)pool.push(c.canvas);c.canvas=null;c.items=null;}
+function clearChunks(reset){for(const c of chunks.values())releaseChunk(c);chunks.clear();if(reset)pool.length=0;}
+function invalidateAhead(){      // plan/walls changed: rebuild only chunks that are completely off-screen
+  if(!CHD)return;const sdev=Math.floor(scroll*dpr);
+  for(const[k,c]of chunks)if(k*CHD>=sdev+cv.height){releaseChunk(c);chunks.delete(k);}
+}
+function stepChunk(c,ops){
+  const p0=c.k*CHD/dpr,topP=(c.k+1)*CHD/dpr,H=CHD/dpr;
+  if(!c.canvas){
+    const items=[];
+    hedgeRange(p0-100,topP+100,items);scatterRange('bushes',p0,topP,items);scatterRange('trees',p0,topP,items);
+    items.sort((a,b)=>a.z-b.z||b.p-a.p);
+    c.items=items;c.canvas=pool.pop()||mk(cv.width,CHD);c.stage=1;c.i=0;
+    const g0=c.canvas.getContext('2d');g0.setTransform(1,0,0,1,0,0);g0.clearRect(0,0,c.canvas.width,c.canvas.height);
+  }
+  const g=c.canvas.getContext('2d'),its=c.items;
+  g.setTransform(dpr,0,0,dpr,0,0);g.globalAlpha=c.stage===1?SHADOW_ALPHA:1;
+  while(ops>0){
+    if(c.i>=its.length){
+      if(c.stage===1){c.stage=2;c.i=0;g.globalAlpha=1;continue;}
+      c.ready=true;c.items=null;g.globalAlpha=1;return;
+    }
+    const it=its[c.i++],y=(topP-it.p)-AY*it.size;
+    if(y>H||y+it.size<0)continue;
+    ops--;
+    g.drawImage(c.stage===1?it.spr.sh:it.spr.fol,it.x-AX*it.size,y,it.size,it.size);
+  }
+}
+function ensureChunks(sdev){
+  const kLo=Math.floor(sdev/CHD),kVis=Math.floor((sdev+cv.height)/CHD);
+  for(const[k,c]of chunks)if(k<kLo){releaseChunk(c);chunks.delete(k);}
+  for(let k=kLo;k<=kVis+1;k++){
+    let c=chunks.get(k);if(!c){c={k,canvas:null,items:null,stage:0,i:0,ready:false};chunks.set(k,c);}
+    if(!c.ready)stepChunk(c,k<=kVis?1e9:70);          // visible ones finish now; the next one is built ~70 draws per frame
+  }
+}
+// ---- layers drawn per biome, clipped to a band of rows
+function layerGround(c,idx,y0,y1){
+  const g=getGround(idx);
+  c.save();c.beginPath();c.rect(0,y0,cw,y1-y0);c.clip();c.translate(0,curS%T);
+  c.fillStyle=c===ctx?(g.pm||(g.pm=ctx.createPattern(g.canvas,'repeat'))):(g.pt||(g.pt=tc.createPattern(g.canvas,'repeat')));
+  c.fillRect(0,-T,cw,ch+T*2);c.restore();
+}
+function layerVerge(c,idx,y0,y1){
+  const v=getVerge(idx),vo=curS%HS;
+  c.save();c.beginPath();c.rect(0,y0,cw,y1-y0);c.clip();
+  c.drawImage(v.L,lxv,vo-HS);c.drawImage(v.L,lxv,vo);c.drawImage(v.R,rxv,vo-HS);c.drawImage(v.R,rxv,vo);
+  c.restore();
+}
+function blend(layer,idA,idB,yT,yB,flip){      // yT..yB = whole transition zone on screen
+  const vt=Math.max(0,yT),vb=Math.min(ch,yB);if(vb<=vt)return;
+  layer(ctx,idA,vt,vb);
+  tc.setTransform(dpr,0,0,dpr,0,0);tc.globalCompositeOperation='source-over';
+  tc.clearRect(0,vt-1,cw,vb-vt+2);
+  layer(tc,idB,vt,vb);
+  tc.globalCompositeOperation='destination-in';
+  tc.save();if(flip){tc.translate(cw,0);tc.scale(-1,1);}
+  tc.drawImage(maskC,0,0,maskC.width,maskC.height,0,yT,cw,yB-yT);
+  tc.restore();tc.globalCompositeOperation='source-over';
+  ctx.drawImage(tcv,0,vt*dpr,tcv.width,(vb-vt)*dpr,0,vt,cw,vb-vt);
+}
+function passRegions(layer,s){
+  const y=p=>Math.round((ch-(p-s))*dpr)/dpr;
+  for(let i=0;i<segs.length;i++){
+    const sg=segs[i],lo=i?segs[i-1].end+segs[i-1].t/2:-Infinity,hi=sg.end-sg.t/2;
+    const top=Math.max(0,y(hi)),bot=Math.min(ch,y(lo));
+    if(bot>top)layer(ctx,sg.id,top,bot);
+    if(i<segs.length-1&&isFinite(sg.end))blend(layer,sg.id,segs[i+1].id,y(sg.end+sg.t/2),y(sg.end-sg.t/2),segs[i+1].flip);
+  }
+}
+function draw(){
+  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.imageSmoothingEnabled=true;
+  const si=Math.floor(scroll),sdev=Math.floor(scroll*dpr);curS=si;
+  ensureSegs();
+  passRegions(layerGround,si);
+  const ro=si%HS;
+  ctx.drawImage(road.canvas,roadL,ro-HS);ctx.drawImage(road.canvas,roadL,ro);
+  passRegions(layerVerge,si);
+  computeRuns(si,si-500,qMax()+WC);drawWalls(si);
+  ensureChunks(sdev);
+  ctx.setTransform(1,0,0,1,0,0);
+  for(const[k,c]of chunks){
+    if(!c.ready)continue;
+    const y=cv.height-((k+1)*CHD-sdev);
+    if(y<cv.height&&y+CHD>0)ctx.drawImage(c.canvas,0,y);
+  }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function biomeNowText(){
+  biomeAt(Math.floor(scroll)+60);
+  const A=BIOMES[BA.a].name;
+  return BA.w>.02?`Biome: ${A} → ${BIOMES[BA.b].name} (${Math.round(BA.w*100)}% changed)`:`Biome: ${A}`;
+}
+let last=0,hudN=0,starve=0,hudTxt='',fpsE=60,rmsE=0,hudT=0;
+function tick(t){
+  if(!last)last=t;
+  const raw=t-last,dt=Math.min(.05,raw/1000);last=t;
+  if(!paused)scroll+=speed*dt;
+  if(raw>0&&raw<1000)fpsE+=(1000/raw-fpsE)*.06;       // smoothed
+  try{
+    const t0=performance.now();
+    draw();
+    const used=performance.now()-t0;
+    rmsE+=(used-rmsE)*.06;
+    if(t-hudT>250){hudT=t;$('fps').textContent=fpsE.toFixed(0)+' fps';$('rms').textContent=rmsE.toFixed(1)+' ms render';}
+    if(used<9||++starve>6){pump(used<9?Math.min(6,12-used):2);starve=0;}      // background builds only use spare frame time
+    if(++hudN%12===0){const tx=biomeNowText();if(tx!==hudTxt){hudTxt=tx;$('biomeNow').textContent=tx;}}
+  }catch(e){$('msg').textContent='Draw error: '+e.message;console.error(e);return;}
+  requestAnimationFrame(tick);
+}
+
+// ================= settings text =================
+function cname(h,s,l){
+  h=((h%360)+360)%360;
+  if(s<12)return l<20?'near-black':l<30?'dark grey':l<42?'mid grey':'light grey';
+  if(s<18&&h>=20&&h<70)return l<35?'dark grey-brown':'grey-beige';
+  if(h<15||h>=345)return l<35?'dark red':'red';
+  if(h<42)return l<30?'dark brown':l<48?'brown':'tan';
+  if(h<70)return l<30?'dark olive':'yellow-green';
+  if(h<165)return l<24?'very dark green':l<32?'dark green':l<42?'green':'bright green';
+  if(h<260)return l<30?'dark blue-grey':'blue-grey';
+  return 'purple';
+}
+const hs3=(h,s,l)=>`hsl(${Math.round(((h%360)+360)%360)}, ${Math.round(s)}%, ${Math.round(l)}%)`;
+function spLine(ids,seed){
+  return ids.map((id,i)=>{
+    const sp=tweak(SP[id],seed+i*31);
+    return `  - ${sp.name}: ${cname(sp.hue,sp.sat,sp.lit)} ${hs3(sp.hue,sp.sat,sp.lit)}`+(sp.aut?`; in autumn ${cname(sp.aut.h,sp.aut.s,sp.aut.l)}`:'');
+  }).join('\n');
+}
+const mixText=(ids,w)=>ids.map((id,i)=>w[i]>0?`${SP[id].name.toLowerCase()} ${w[i]}`:'').filter(Boolean).join(', ');
+const rateText=()=>bioRate===0?'hold (no change)':`about every ${Math.round(segLen()/10)*10} px of road, each blend ~${tFor(segLen())} px long`;
+function settingsText(){
+  if(!road||!segs.length)return'';
+  const P=road.P,R=road.info,S=state.seeds,hp=tweak(SP.hedgeblob,S.hedge);
+  const L_=[];
+  L_.push('BIMBLE ROAD SCENE - SETTINGS (paste this back to Claude)');
+  L_.push(`Canvas: ${cw} x ${ch} px (screen ${innerWidth} x ${innerHeight}, pixel ratio ${dpr}), size unit ${u.toFixed(2)}`);
+  L_.push(`Scroll speed: ${speed} px/s${paused?' (paused)':''}, direction: scenery moves top to bottom`);
+  L_.push(`Off-screen buffer: scenery is pre-drawn in ${Math.round(CHD/dpr)} px chunks, always at least one chunk above the canvas, so nothing pops in`);
+  L_.push('Light: from bottom-left, short soft shadows fall up-right');
+  L_.push('');
+  L_.push(`ROAD  [seed ${S.road}]  ${roadW} px wide (50% of canvas), centred, loops every ${HS} px. Independent of the biomes.`);
+  L_.push(`  - Tarmac: ${cname(P.tarH,P.tarS,P.tarL)} ${hs3(P.tarH,P.tarS,P.tarL)}, darker worn wheel paths, aggregate chips`);
+  L_.push(`  - Dirt: ${cname(P.dirtH,P.dirtS,P.dirtL)} ${hs3(P.dirtH,P.dirtS,P.dirtL)}, wheel ruts, pebbles`);
+  L_.push(`  - Gravel: ${cname(P.gravH,P.gravS,P.gravL)} ${hs3(P.gravH,P.gravS,P.gravL)}, loose stone chips, covers about ${R.gravPct}% of the road in separate stretches that blend over tarmac or dirt`);
+  L_.push(`  - Balance: about ${100-R.dirtPct}% tarmac / ${R.dirtPct}% dirt, ragged dithered transition`);
+  L_.push(`  - Surface order along travel: ${R.seq.join(' > ')}`);
+  L_.push(`  - Extras: ${P.cracks} cracks, ${P.patches} patch repairs, ${P.puddles} puddles, centre dashed line ${P.centre?'yes (tarmac only)':'no'}`);
+  L_.push('');
+  L_.push(`BIOME CHANGE  [seed ${S.biomes}]  slider ${bioRate}/100: ${rateText()}`);
+  L_.push(`  - ${biomeNowText()}`);
+  L_.push(`  - Plan along the road: ${segs.map(sg=>BIOMES[sg.id].name+(isFinite(sg.end)?` (to ${sg.end} px)`:' (held)')).join(' > ')}`);
+  L_.push('  - Ground and verge cross-fade through a ragged blotchy mask; trees, bushes and hedge swap species, colour and density gradually (each plant picks old or new biome by chance, more and more new)');
+  L_.push('  - Biome list:');
+  for(const B of BIOMES){
+    const sp=B.g;
+    L_.push(`    * ${B.name}: ground ${cname(sp.h,sp.s,sp.l)} ${hs3(sp.h,sp.s,sp.l)} (${sp.kind}), foliage ${B.season}; trees x${B.td} [${mixText(GROUPS.trees.ids,B.tw)}]; bushes x${B.bd} [${mixText(GROUPS.bushes.ids,B.bw)}]`);
+  }
+  L_.push('');
+  L_.push(`WALLS  [seed ${S.walls}]  slider ${Math.round(wallShare/.7*100)}/100, about ${Math.round(wallShare*100)}% of cells start a wall run; sides: ${wallTogether?'together (same wall left and right)':'independent (left and right differ)'}`);
+  L_.push(`  - Brick (red-brown courses, mortar, moss) and dry stone (grey flat stones), ${walls.ww} px wide in the hedge line, soft shadow to the right, coping pillars at ends and every 640 px`);
+  L_.push('  - The hedge thins out over ~180 px before a wall and is replaced by it; walls ignore the road and the biome');
+  L_.push('');
+  L_.push(`GRASS/GROUND  [seed ${S.grass}]  256 px repeating tile per biome (blades, wildflowers, needles, leaf litter, furrows, heather depending on biome)`);
+  L_.push(`  - Verge: about ${vw} px wide each side, lighter than the field, ragged edges, dirt crumbs on the road side`);
+  L_.push('');
+  L_.push(`HEDGE  [seed ${S.hedge}]  about ${hw} px wide each side, ${cname(hp.hue,hp.sat,hp.lit)} ${hs3(hp.hue,hp.sat,hp.lit)} (autumn: mixed green/yellow/orange), two staggered lanes of leafy clumps (${NH} variants)`);
+  L_.push('');
+  L_.push(`TREES  [seed ${S.trees}]  base density ${GROUPS.trees.dens}, outside the hedge, no trunks (top-down)`);
+  L_.push(spLine(GROUPS.trees.ids,S.trees));
+  L_.push('');
+  L_.push(`BUSHES  [seed ${S.bushes}]  base density ${GROUPS.bushes.dens}, in the gaps between trees`);
+  L_.push(spLine(GROUPS.bushes.ids,S.bushes));
+  L_.push('');
+  L_.push(`SEED CODE: road=${S.road} grass=${S.grass} hedge=${S.hedge} trees=${S.trees} bushes=${S.bushes} biomes=${S.biomes} walls=${S.walls} wallShare=${wallShare.toFixed(2)} together=${wallTogether} speed=${speed} biomeChange=${bioRate}`);
+  return L_.join('\n');
+}
+function refreshText(){$('out').value=settingsText();}
+
+// ================= UI =================
+function redo(fn,key){state.seeds[key]=rnd();fn();refreshText();}
+$('bRoad').onclick=()=>redo(genRoad,'road');
+$('bGrass').onclick=()=>redo(genGrass,'grass');
+$('bHedge').onclick=()=>redo(genHedge,'hedge');
+$('bTrees').onclick=()=>redo(genTrees,'trees');
+$('bBush').onclick=()=>redo(genBushes,'bushes');
+function reseedBiomes(){state.seeds.biomes=rnd();segRng=mulberry32(state.seeds.biomes);retarget(true);refreshText();$('biomeNow').textContent=biomeNowText();}
+$('bBiome').onclick=reseedBiomes;
+function everything(){for(const k of Object.keys(state.seeds))state.seeds[k]=rnd();segRng=mulberry32(state.seeds.biomes);genAll();retarget(true);refreshText();}
+$('bAll').onclick=everything;
+$('speed').oninput=e=>{speed=+e.target.value;$('speedO').textContent=speed;refreshText();};
+function biomeLabel(){$('biomeO').textContent=bioRate===0?'hold':bioRate;}
+$('biome').oninput=e=>{bioRate=+e.target.value;biomeLabel();retarget(false);refreshText();};
+function togglePause(){paused=!paused;$('bPause').textContent=paused?'▶ Play':'⏸ Pause';refreshText();}
+$('bPause').onclick=togglePause;
+function wallsAhead(){      // forget wall decisions (and chunks) beyond the visible area so a slider change shows up soon
+  const lim=Math.floor(scroll)+ch+2*WC;
+  for(const k of[...wallCells.keys()])if(+k.split(':')[1]*WC>lim)wallCells.delete(k);
+  invalidateAhead();
+}
+$('walls').oninput=e=>{wallShare=+e.target.value/100*.7;$('wallsO').textContent=e.target.value;wallsAhead();refreshText();};
+$('bWalls').onclick=()=>{state.seeds.walls=rnd();genWalls();clearChunks();refreshText();};
+$('bSides').onclick=()=>{wallTogether=!wallTogether;wallCells.clear();clearChunks();$('bSides').textContent='↔ Sides: '+(wallTogether?'together':'independent');refreshText();};
+let msgT=0;
+function say(t){const m=$('msg');m.textContent=t;clearTimeout(msgT);msgT=setTimeout(()=>{m.textContent='';},2500);}
+async function copySettings(){
+  refreshText();const txt=$('out').value;
+  try{await navigator.clipboard.writeText(txt);say('Copied ✓');return;}catch(e){}
+  try{const ta=$('out');$('det').open=true;ta.focus();ta.select();if(document.execCommand('copy')){say('Copied ✓');return;}}catch(e){}
+  $('det').open=true;$('out').focus();$('out').select();say('Select the text below and copy it');
+}
+$('bCopy').onclick=copySettings;
+addEventListener('keydown',e=>{
+  if(e.target&&(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT'&&e.target.type!=='range'))return;
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+  const k=e.key.toLowerCase();
+  if(k===' '){e.preventDefault();togglePause();}
+  else if(k==='t')$('bTrees').onclick();else if(k==='r')$('bRoad').onclick();else if(k==='g')$('bGrass').onclick();
+  else if(k==='h')$('bHedge').onclick();else if(k==='b')$('bBush').onclick();else if(k==='m')$('bBiome').onclick();else if(k==='w')$('bWalls').onclick();else if(k==='a')everything();
+});
+let rt=0,lastW=0,lastH=0;
+addEventListener('resize',()=>{
+  clearTimeout(rt);
+  rt=setTimeout(()=>{
+    const w=document.documentElement.clientWidth||innerWidth,h=Math.floor(innerHeight/2);
+    if(Math.abs(w-lastW)<2&&Math.abs(h-lastH)<40)return;   // ignore tiny mobile toolbar resizes
+    lastW=w;lastH=h;genAll();
+  },300);
+});
+
+try{
+  for(const k of Object.keys(state.seeds))state.seeds[k]=rnd();
+  bioRate=+$('biome').value;biomeLabel();
+  layout();initSegs();genAll();lastW=cw;lastH=ch;
+  $('biomeNow').textContent=biomeNowText();
+  requestAnimationFrame(tick);
+}catch(err){
+  $('msg').textContent='Error: '+err.message;$('msg').style.color='#ff8a80';console.error(err);
+}
+})();
+</script>
+</body>
+</html>
