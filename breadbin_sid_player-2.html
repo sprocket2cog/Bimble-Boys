@@ -1,0 +1,1148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Breadbin SID Player</title>
+</head>
+<body>
+<style>*,*::before,*::after{box-sizing:border-box}html{background:#6c5eb5}body{margin:0}[hidden]{display:none!important}</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Share+Tech+Mono&display=swap">
+<style>
+/* Layout: a C64 screen. Light-blue border frame (the body), dark-blue screen (the frame),
+   scope on top, three voice rows, transport at the bottom. Single committed look. */
+:root {
+  --border: #6c5eb5;
+  --bg: #2c2370;
+  --panel: #352879;
+  --line: #4d409f;
+  --ink: #d2ccff;
+  --dim: #a59de8;
+  --v1: #9ad284;
+  --v2: #e6cf75;
+  --v3: #e69aa8;
+  --alert: #ffb199;
+  --f-display: "Silkscreen", "Courier New", monospace;
+  --f-body: "Share Tech Mono", "Courier New", monospace;
+  color-scheme: dark;
+}
+html, body { height: auto; }
+body {
+  background: var(--border);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.45;
+  padding-block: 14px;
+  padding-inline: 16px;
+}
+.frame {
+  background: var(--bg);
+  max-width: 640px;
+  margin-inline: auto;
+  padding: 20px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.frame > * { min-width: 0; }
+h1 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 1.55rem;
+  line-height: 1.15;
+  letter-spacing: 0.04em;
+  margin: 0;
+  color: #fff;
+  text-wrap: balance;
+}
+.spec {
+  font-family: var(--f-display);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 0 0 8px;
+}
+.lede { margin: 8px 0 0; color: var(--ink); max-width: 52ch; }
+
+.btn {
+  font-family: var(--f-display);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--panel);
+  border: 2px solid var(--border);
+  border-radius: 0;
+  min-height: 44px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:hover { border-color: var(--ink); }
+.btn:active, .btn[aria-pressed="true"] { background: var(--border); color: #fff; }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 700; }
+.btn.primary:hover { background: #fff; border-color: #fff; }
+.btn:disabled { opacity: 0.4; cursor: default; }
+.btn:focus-visible, input[type="range"]:focus-visible, #file:focus-visible + label {
+  outline: 3px solid var(--v2);
+  outline-offset: 2px;
+}
+#file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.load { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+#drop {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  border: 2px dashed var(--line);
+  color: var(--dim);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+#drop.over { border-color: var(--v1); color: var(--ink); }
+#drop.err { border-color: var(--alert); color: var(--alert); border-style: solid; }
+
+.now { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; margin: 0; }
+.now dt { font-family: var(--f-display); font-size: 0.68rem; letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; padding-top: 4px; }
+.now dd { margin: 0; overflow-wrap: anywhere; color: #fff; font-size: 1.05rem; }
+.meta { margin: 0; color: var(--dim); font-size: 0.85rem; overflow-wrap: anywhere; }
+
+#scopeWrap { border: 2px solid var(--line); background: #1f1857; }
+#scope { display: block; width: 100%; height: 140px; }
+
+.voices { display: flex; flex-direction: column; gap: 8px; }
+.voice {
+  --c: var(--v1);
+  display: grid;
+  grid-template-columns: 2rem 1fr 7.5rem 44px;
+  align-items: center;
+  gap: 10px;
+}
+.voice:nth-child(2) { --c: var(--v2); }
+.voice:nth-child(3) { --c: var(--v3); }
+.voice .tag { font-family: var(--f-display); font-size: 0.8rem; color: var(--c); }
+.bar { height: 14px; background: #1f1857; border: 2px solid var(--line); position: relative; overflow: hidden; }
+.bar i { position: absolute; inset: 0; background: var(--c); transform-origin: left; transform: scaleX(0); }
+.voice .note { font-size: 0.9rem; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.voice .mute { min-height: 36px; width: 44px; padding: 0; font-size: 0.7rem; }
+.voice.muted .tag, .voice.muted .note { opacity: 0.4; }
+.voice .mute[aria-pressed="true"] { background: var(--border); color: #fff; }
+
+.transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.transport .play { min-width: 104px; }
+.readout { font-family: var(--f-display); font-size: 0.8rem; letter-spacing: 0.06em; color: var(--ink); font-variant-numeric: tabular-nums; }
+.vol { display: flex; align-items: center; gap: 10px; flex: 1 1 160px; min-width: 0; }
+.vol label { font-family: var(--f-display); font-size: 0.68rem; letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; }
+.vol input { flex: 1; min-width: 0; accent-color: var(--v1); height: 28px; }
+
+.knob { display: grid; grid-template-columns: 4.6rem 1fr; align-items: center; gap: 10px; }
+.knob label, .check { font-family: var(--f-display); font-size: 0.68rem; letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; }
+.knob input { min-width: 0; accent-color: var(--v1); height: 28px; }
+.check { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.check input { width: 22px; height: 22px; accent-color: var(--v1); }
+.foot { margin: 0; font-size: 0.8rem; color: var(--dim); }
+.cursor { display: inline-block; width: 0.6em; height: 1em; background: var(--ink); vertical-align: -0.15em; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+@media (max-width: 420px) {
+  .voice { grid-template-columns: 1.7rem 1fr 6.4rem 44px; gap: 8px; }
+  h1 { font-size: 1.3rem; }
+}
+
+.btn.sm { min-height: 40px; padding: 0 12px; font-size: 0.72rem; }
+.sound { display: flex; flex-direction: column; gap: 10px; }
+.sound h2 { font-family: var(--f-display); font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); margin: 0; font-weight: 400; }
+.grp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.grp .glabel { font-family: var(--f-display); font-size: 0.68rem; letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; min-width: 4.6rem; }
+.mixer { border: 2px solid var(--line); padding: 4px 12px 10px; }
+.mixer summary { font-family: var(--f-display); font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink); min-height: 40px; display: flex; align-items: center; cursor: pointer; }
+.mixer summary:focus-visible { outline: 3px solid var(--v2); outline-offset: 2px; }
+.mrow { display: grid; grid-template-columns: 1.8rem 1fr 1fr; gap: 10px; align-items: center; }
+.mrow .tag { font-family: var(--f-display); font-size: 0.75rem; color: var(--ink); }
+.mrow input { min-width: 0; accent-color: var(--v1); height: 28px; width: 100%; }
+.mhead { color: var(--dim); font-size: 0.78rem; }
+#copyFallback { width: 100%; background: #1f1857; color: var(--ink); border: 2px solid var(--line); font-family: var(--f-body); font-size: 0.8rem; padding: 8px; border-radius: 0; }
+</style>
+
+<main class="frame" id="screen">
+  <header>
+    <p class="spec">MOS 6581 · 3 voices · PSID / RSID</p>
+    <h1>BREADBIN SID PLAYER</h1>
+    <p class="lede">Open a .sid file from your device. The 6502 code and the sound chip run inside this page, and nothing is uploaded.</p>
+  </header>
+
+  <section class="load" aria-label="Load a tune">
+    <input id="file" type="file">
+    <label class="btn primary" for="file">Choose .sid file</label>
+    <button class="btn" id="demo" type="button">Play demo tune</button>
+    <p id="drop" role="status">Or drop a .sid file here<span class="cursor" aria-hidden="true" style="margin-left:8px"></span></p>
+  </section>
+
+  <section aria-label="Now playing">
+    <dl class="now">
+      <dt>Title</dt><dd id="iTitle">-</dd>
+      <dt>Author</dt><dd id="iAuthor">-</dd>
+      <dt>Released</dt><dd id="iRel">-</dd>
+    </dl>
+    <p class="meta" id="meta" style="margin-top:10px">No tune loaded.</p>
+  </section>
+
+  <div id="scopeWrap"><canvas id="scope" aria-label="Oscilloscope of the output"></canvas></div>
+
+  <section class="voices" aria-label="Voices">
+    <div class="voice" id="v0"><span class="tag">V1</span><div class="bar"><i></i></div><span class="note">--</span><button class="btn mute" type="button" aria-pressed="false" aria-label="Mute voice 1">MUTE</button></div>
+    <div class="voice" id="v1"><span class="tag">V2</span><div class="bar"><i></i></div><span class="note">--</span><button class="btn mute" type="button" aria-pressed="false" aria-label="Mute voice 2">MUTE</button></div>
+    <div class="voice" id="v2"><span class="tag">V3</span><div class="bar"><i></i></div><span class="note">--</span><button class="btn mute" type="button" aria-pressed="false" aria-label="Mute voice 3">MUTE</button></div>
+  </section>
+
+  <section class="transport" aria-label="Transport">
+    <button class="btn" id="prev" type="button" disabled>Prev</button>
+    <button class="btn primary play" id="play" type="button" disabled>Play</button>
+    <button class="btn" id="next" type="button" disabled>Next</button>
+    <span class="readout" id="songInfo">SONG -/-</span>
+    <span class="readout" id="time">00:00</span>
+    <div class="vol"><label for="vol">Vol</label><input id="vol" type="range" min="0" max="100" value="80"></div>
+  </section>
+
+  <section class="sound" aria-label="Sound">
+    <h2>Sound</h2>
+    <div class="grp" role="group" aria-label="Presets">
+      <span class="glabel">Preset</span>
+      <button class="btn sm" type="button" data-preset="warm">Warm</button>
+      <button class="btn sm" type="button" data-preset="clean">Clean</button>
+      <button class="btn sm" type="button" data-preset="wide">Wide</button>
+      <button class="btn sm" type="button" data-preset="raw">Raw</button>
+    </div>
+    <div class="grp" role="group" aria-label="Chip model">
+      <span class="glabel">Chip</span>
+      <button class="btn sm" type="button" id="chip6581" aria-pressed="true">6581</button>
+      <button class="btn sm" type="button" id="chip8580" aria-pressed="false">8580</button>
+    </div>
+    <div class="knob"><label for="rev">Reverb</label><input id="rev" type="range" min="0" max="100" value="20"></div>
+    <div class="knob"><label for="chorus">Chorus</label><input id="chorus" type="range" min="0" max="100" value="15"></div>
+    <div class="knob"><label for="smooth">Smooth</label><input id="smooth" type="range" min="0" max="100" value="35"></div>
+    <div class="knob"><label for="drive">Drive</label><input id="drive" type="range" min="0" max="100" value="20"></div>
+    <div class="knob"><label for="bass">Bass</label><input id="bass" type="range" min="0" max="100" value="20"></div>
+    <div class="knob"><label for="width">Width</label><input id="width" type="range" min="0" max="100" value="40"></div>
+    <label class="check" for="clean"><input type="checkbox" id="clean" checked>Clean oscillators</label>
+    <details class="mixer">
+      <summary>Voice mixer</summary>
+      <div class="mrow mhead"><span></span><span>Volume</span><span>Pan</span></div>
+      <div class="mrow"><span class="tag">V1</span><input id="vol0" type="range" min="0" max="150" value="100" aria-label="Voice 1 volume"><input id="pan0" type="range" min="-100" max="100" value="-40" aria-label="Voice 1 pan"></div>
+      <div class="mrow"><span class="tag">V2</span><input id="vol1" type="range" min="0" max="150" value="100" aria-label="Voice 2 volume"><input id="pan1" type="range" min="-100" max="100" value="0" aria-label="Voice 2 pan"></div>
+      <div class="mrow"><span class="tag">V3</span><input id="vol2" type="range" min="0" max="150" value="100" aria-label="Voice 3 volume"><input id="pan2" type="range" min="-100" max="100" value="40" aria-label="Voice 3 pan"></div>
+    </details>
+    <div class="grp"><button class="btn sm" type="button" id="copySettings">Copy settings</button></div>
+    <textarea id="copyFallback" readonly hidden rows="8" aria-label="Settings text"></textarea>
+  </section>
+
+  <p class="foot">Audio renders at 32 kHz with anti-aliased oscillators, a soft limiter and a compressor. Raw sets everything flat for a harsher, closer-to-chip sound. Tunes that play samples or depend on exact raster timing can still sound rough.</p>
+</main>
+
+<script id="engine" type="text/plain">
+//ENGINE-START
+'use strict';
+const PAL_CLOCK = 985248, NTSC_CLOCK = 1022727;
+
+function parseSid(buf) {
+  const u = new Uint8Array(buf);
+  if (u.length < 0x7c) throw new Error('File is too small to be a SID file.');
+  const dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
+  const magic = String.fromCharCode(u[0], u[1], u[2], u[3]);
+  if (magic !== 'PSID' && magic !== 'RSID') throw new Error('This is not a PSID or RSID file.');
+  const version = dv.getUint16(4);
+  const off = dv.getUint16(6);
+  let load = dv.getUint16(8);
+  let init = dv.getUint16(10);
+  const play = dv.getUint16(12);
+  const songs = Math.max(1, dv.getUint16(14));
+  const start = Math.min(songs, Math.max(1, dv.getUint16(16)));
+  const speed = dv.getUint32(18);
+  const str = (o) => { let s = ''; for (let i = o; i < o + 32 && u[i]; i++) s += String.fromCharCode(u[i]); return s; };
+  const flags = version >= 2 && u.length >= 0x78 ? dv.getUint16(0x76) : 0;
+  let data = u.subarray(off);
+  if (load === 0) { if (data.length < 2) throw new Error('No tune data found.'); load = data[0] | (data[1] << 8); data = data.subarray(2); }
+  if (load + data.length > 65536) data = data.subarray(0, 65536 - load);
+  if (!init) init = load;
+  const clock = ((flags >> 2) & 3) === 2 ? NTSC_CLOCK : PAL_CLOCK;
+  return { type: magic, version, load, init, play, songs, start, speed, flags, clock, data, size: u.length,
+           title: str(0x16), author: str(0x36), released: str(0x56) };
+}
+
+function buildDemo() {
+  const h = new Uint8Array(0x7c); const dv = new DataView(h.buffer);
+  h.set([0x50, 0x53, 0x49, 0x44]);
+  dv.setUint16(4, 2); dv.setUint16(6, 0x7c); dv.setUint16(8, 0x1000); dv.setUint16(10, 0x1000);
+  dv.setUint16(12, 0x1020); dv.setUint16(14, 1); dv.setUint16(16, 1); dv.setUint32(18, 0);
+  const put = (o, s) => { for (let i = 0; i < s.length && i < 31; i++) h[o + i] = s.charCodeAt(i); };
+  put(0x16, 'Demo Arpeggio'); put(0x36, 'Breadbin SID Player'); put(0x56, '2026'); dv.setUint16(0x76, 4);
+  const code = new Uint8Array(0x60);
+  code.set([0xA9,0x0F,0x8D,0x18,0xD4,0xA9,0x08,0x8D,0x05,0xD4,0xA9,0xA8,0x8D,0x06,0xD4,
+            0xA9,0x08,0x8D,0x03,0xD4,0xA9,0x00,0x8D,0x02,0xD4,0x8D,0x00,0x11,0x8D,0x01,0x11,0x60], 0);
+  code.set([0xEE,0x01,0x11,0xAD,0x01,0x11,0x29,0x0F,0xD0,0x20,0xA9,0x40,0x8D,0x04,0xD4,0xAE,0x00,0x11,
+            0xBD,0x50,0x10,0x8D,0x00,0xD4,0xBD,0x58,0x10,0x8D,0x01,0xD4,0xA9,0x41,0x8D,0x04,0xD4,
+            0xE8,0x8A,0x29,0x07,0x8D,0x00,0x11,0x60], 0x20);
+  code.set([0xA2,0x67,0xED,0x44,0x13,0xED,0x67,0xED], 0x50);
+  code.set([0x0E,0x11,0x15,0x1D,0x1A,0x15,0x11,0x15], 0x58);
+  const out = new Uint8Array(h.length + code.length);
+  out.set(h, 0); out.set(code, h.length);
+  return out.buffer;
+}
+
+/* ---------- SID chip ---------- */
+function makeSid() {
+  const ratePer = [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251];
+  const v = [0, 1, 2].map(() => ({ freq: 0, pw: 0, ctrl: 0, ad: 0, sr: 0, ph: 0, lfsr: 0x7ffff8,
+    state: 2, level: 0, rc: 0, ec: 0, wave: -1, wrapped: false, mute: false }));
+  let fc = 0, res = 0, filt = 0, mode = 0, vol = 0, off3 = false;
+  let lowL = 0, bandL = 0, lowR = 0, bandR = 0, rate = 32000;
+  // sound shaping
+  let clean = true, smooth = 0.35, chip = '6581', drive = 0.2;
+  const mixVol = [1, 1, 1], mixPan = [-0.4, 0, 0.4];
+  const gl = [1, 1, 1], gr = [1, 1, 1];
+  let dcPx = 0, dcPy = 0, dcQx = 0, dcQy = 0, lpL = 0, lpR = 0, lpA = 1;
+  const out = { l: 0, r: 0 };
+  const sat = (x) => { x = x > 3 ? 3 : x < -3 ? -3 : x; return x * (27 + x * x) / (27 + 9 * x * x); };
+
+  function shape() {
+    for (let i = 0; i < 3; i++) {
+      const ang = (mixPan[i] + 1) * Math.PI / 4;
+      gl[i] = Math.cos(ang) * Math.SQRT2 * mixVol[i]; gr[i] = Math.sin(ang) * Math.SQRT2 * mixVol[i];
+    }
+    if (smooth <= 0) lpA = 1;
+    else { const fcut = 16000 * Math.pow(3000 / 16000, smooth); lpA = 1 - Math.exp(-2 * Math.PI * fcut / rate); }
+  }
+  function setup(sr) { rate = sr; shape(); }
+  function set(o) {
+    if ('clean' in o) clean = !!o.clean;
+    if ('smooth' in o) smooth = Math.max(0, Math.min(1, o.smooth));
+    if ('chip' in o) chip = o.chip === '8580' ? '8580' : '6581';
+    if ('drive' in o) drive = Math.max(0, Math.min(1, o.drive));
+    if (o.vol) for (let i = 0; i < 3; i++) mixVol[i] = Math.max(0, Math.min(1.5, +o.vol[i]));
+    if (o.pan) for (let i = 0; i < 3; i++) mixPan[i] = Math.max(-1, Math.min(1, +o.pan[i]));
+    shape();
+  }
+  function reset() {
+    for (const c of v) { c.freq = c.pw = c.ctrl = c.ad = c.sr = 0; c.ph = 0; c.lfsr = 0x7ffff8; c.state = 2;
+      c.level = 0; c.rc = 0; c.ec = 0; c.wave = -1; c.wrapped = false; }
+    fc = res = filt = mode = vol = 0; off3 = false; lowL = bandL = lowR = bandR = 0;
+    dcPx = dcPy = dcQx = dcQy = lpL = lpR = 0;
+  }
+
+  function write(r, val) {
+    r &= 31;
+    if (r < 21) {
+      const c = v[(r / 7) | 0];
+      switch (r % 7) {
+        case 0: c.freq = (c.freq & 0xff00) | val; break;
+        case 1: c.freq = (c.freq & 0xff) | (val << 8); break;
+        case 2: c.pw = (c.pw & 0xf00) | val; break;
+        case 3: c.pw = (c.pw & 0xff) | ((val & 15) << 8); break;
+        case 4: {
+          const g = val & 1, og = c.ctrl & 1;
+          if (g && !og) { c.state = 0; } else if (!g && og) { c.state = 2; }
+          if (val & 8) { c.ph = 0; c.lfsr = 0x7ffff8; }
+          c.ctrl = val; break;
+        }
+        case 5: c.ad = val; break;
+        case 6: c.sr = val; break;
+      }
+    } else if (r === 21) fc = (fc & 0x7f8) | (val & 7);
+    else if (r === 22) fc = (fc & 7) | (val << 3);
+    else if (r === 23) { res = val >> 4; filt = val & 7; }
+    else if (r === 24) { vol = val & 15; mode = (val >> 4) & 7; off3 = (val & 128) !== 0; }
+  }
+  function read(r) {
+    if (r === 0x1b) return v[2].wave < 0 ? 0 : (v[2].wave >> 4) & 255;
+    if (r === 0x1c) return v[2].level;
+    return 0;
+  }
+
+  function env(c, cyc) {
+    c.rc += cyc;
+    for (;;) {
+      const per = c.state === 0 ? ratePer[c.ad >> 4] : c.state === 1 ? ratePer[c.ad & 15] : ratePer[c.sr & 15];
+      if (c.rc < per) break;
+      c.rc -= per;
+      if (c.state === 0) {
+        if (c.level < 255) c.level++;
+        if (c.level >= 255) { c.state = 1; c.ec = 0; }
+      } else {
+        const sus = (c.sr >> 4) * 17;
+        if (c.state === 1 && c.level <= sus) continue;
+        c.ec++;
+        const l = c.level;
+        const ep = l > 0x5d ? 1 : l > 0x36 ? 2 : l > 0x1a ? 4 : l > 0x0e ? 8 : l > 0x06 ? 16 : l > 0 ? 30 : 1;
+        if (c.ec >= ep) { c.ec = 0; if (c.level > 0) c.level--; }
+      }
+    }
+  }
+  function clockLfsr(c) {
+    const l = c.lfsr;
+    c.lfsr = ((l << 1) | (((l >> 22) ^ (l >> 17)) & 1)) & 0x7fffff;
+  }
+  function advance(c, cps) {
+    if (c.ctrl & 8) { c.wrapped = false; return; }
+    const old = c.ph, nu = old + c.freq * cps;
+    if (c.ctrl & 0x80) {
+      const e = Math.floor((nu - 524288) / 1048576) - Math.floor((old - 524288) / 1048576);
+      for (let j = 0; j < e && j < 16; j++) clockLfsr(c);
+    }
+    c.wrapped = nu >= 16777216;
+    c.ph = c.wrapped ? nu - 16777216 * Math.floor(nu / 16777216) : nu;
+  }
+  // integer 12-bit waveform (triangle, noise and combined waveforms)
+  function wave(c, src) {
+    const ct = c.ctrl, sel = ct >> 4;
+    if (!sel) return -1;
+    const ph = c.ph | 0;
+    let o = 0xfff;
+    if (sel & 1) {
+      let msb = (ph >> 23) & 1;
+      if (ct & 4) msb ^= ((src.ph | 0) >> 23) & 1;
+      let t = ((ph >> 11) & 0x7ff) << 1;
+      if (msb) t ^= 0xfff;
+      o &= t;
+    }
+    if (sel & 2) o &= (ph >> 12);
+    if (sel & 4) o &= ((ct & 8) || (ph >> 12) >= c.pw) ? 0xfff : 0;
+    if (sel & 8) {
+      if (sel & 7) return 0;
+      const l = c.lfsr;
+      return ((l & 0x100000) >> 9) | ((l & 0x40000) >> 8) | ((l & 0x4000) >> 5) | ((l & 0x800) >> 3) |
+             ((l & 0x200) >> 2) | ((l & 0x20) << 1) | ((l & 0x4) << 3) | ((l & 0x1) << 4);
+    }
+    // Combined waveforms. The 6581 drives the bits weakly, so a lone set bit
+    // with no set neighbour gets pulled down. The 8580 gives the plain AND.
+    // This is a model of that behaviour, not measured chip data.
+    if (chip === '6581' && (sel & (sel - 1) & 7)) o = o & ((o << 1) | (o >> 1)) & 0xfff;
+    return o;
+  }
+  // polyBLEP residual: rounds off the hard edge of a saw or pulse so it does not alias
+  function blep(t, dt) {
+    if (t < dt) { const x = t / dt; return x + x - x * x - 1; }
+    if (t > 1 - dt) { const x = (t - 1) / dt; return x * x + x + x + 1; }
+    return 0;
+  }
+  function voice(c, src, dt) {
+    const ct = c.ctrl, sel = ct >> 4;
+    if (!sel) { c.wave = -1; return 0; }
+    if (clean && dt < 0.4 && (sel === 2 || sel === 4)) {
+      const t = c.ph * (1 / 16777216);
+      if (sel === 2) { c.wave = (t * 4096) | 0; return 2 * t - 1 - blep(t, dt); }
+      if (ct & 8) { c.wave = 4095; return 1; }
+      const p = c.pw / 4096;
+      let s = t < p ? 1 : -1;
+      s += blep(t, dt);
+      let t2 = t - p; if (t2 < 0) t2 += 1;
+      s -= blep(t2, dt);
+      c.wave = t >= p ? 4095 : 0;
+      return -s;
+    }
+    const w = wave(c, src);
+    c.wave = w;
+    return w < 0 ? 0 : (w - 2048) / 2048;
+  }
+
+  function sample(cps) {
+    for (let i = 0; i < 3; i++) env(v[i], cps);
+    for (let i = 0; i < 3; i++) advance(v[i], cps);
+    for (let i = 0; i < 3; i++) { const c = v[i]; if ((c.ctrl & 2) && v[(i + 2) % 3].wrapped) c.ph = 0; }
+    let dl = 0, dr = 0, fl = 0, fr = 0;
+    for (let i = 0; i < 3; i++) {
+      const c = v[i];
+      let s = voice(c, v[(i + 2) % 3], c.freq * cps * (1 / 16777216)) * c.level * (1 / 255);
+      if (c.mute) s = 0;
+      if (i === 2 && off3 && !(filt & 4)) s = 0;
+      if (filt & (1 << i)) { fl += s * gl[i]; fr += s * gr[i]; } else { dl += s * gl[i]; dr += s * gr[i]; }
+    }
+    if (filt) {
+      const fsEff = rate * 2, x01 = fc / 2047;
+      // 6581: cutoff stays low then rises steeply. 8580: close to linear.
+      const hz = chip === '6581' ? 220 + 9000 * x01 * x01 * x01 * x01 : 30 + 14000 * x01;
+      const f = 2 * Math.sin(Math.PI * Math.min(hz, fsEff / 6) / fsEff);
+      const qd = 1.4 - 1.05 * (res / 15);
+      const dk = drive * 0.6;
+      let oL = 0, oR = 0;
+      for (let k = 0; k < 2; k++) {
+        lowL += f * bandL; const hL = fl - lowL - qd * bandL; bandL += f * hL;
+        lowR += f * bandR; const hR = fr - lowR - qd * bandR; bandR += f * hR;
+        if (dk > 0) {
+          lowL = sat(lowL * dk) / dk; bandL = sat(bandL * dk) / dk;
+          lowR = sat(lowR * dk) / dk; bandR = sat(bandR * dk) / dk;
+        }
+        oL += (mode & 1 ? lowL : 0) + (mode & 2 ? bandL : 0) + (mode & 4 ? hL : 0);
+        oR += (mode & 1 ? lowR : 0) + (mode & 2 ? bandR : 0) + (mode & 4 ? hR : 0);
+      }
+      if (!(Math.abs(lowL) < 1e6 && Math.abs(bandL) < 1e6 && Math.abs(lowR) < 1e6 && Math.abs(bandR) < 1e6)) {
+        lowL = bandL = lowR = bandR = 0; oL = oR = 0;
+      }
+      dl += oL * 0.5; dr += oR * 0.5;
+    }
+    const g = (vol / 15) * 0.3;
+    // remove DC (the real chip has a coupling capacitor), then smooth, then soft-limit
+    let x = dl * g; dcPy = x - dcPx + 0.997 * dcPy; dcPx = x; lpL += lpA * (dcPy - lpL);
+    let y = dr * g; dcQy = y - dcQx + 0.997 * dcQy; dcQx = y; lpR += lpA * (dcQy - lpR);
+    out.l = sat(lpL); out.r = sat(lpR);
+  }
+  return { v, write, read, reset, setup, set, sample, out, ratePer };
+}
+
+/* ---------- 6502 machine ---------- */
+function makeMachine(sid) {
+  const mem = new Uint8Array(65536);
+  const TRAP = 0xfff0, MAXI = 250000;
+  const KEND = new Uint8Array(65536);
+  [0xea31, 0xea81, 0xea7e, 0xea7b, 0xfebc, TRAP].forEach(a => { KEND[a] = 1; });
+  let a = 0, x = 0, y = 0, sp = 0xff, pc = 0, fc = 0, fz = 0, fi = 0, fd = 0, fv = 0, fn = 0;
+  let raster = 0, cia = 0;
+  let tune = null, song = 1, playAddr = 0, irqStyle = false, hz = 50;
+
+  function rd(ad) {
+    if (ad >= 0xd000 && ad < 0xde00) {
+      if (ad === 0xd012) { raster = (raster + 1) % 312; return raster & 255; }
+      if (ad === 0xd011) return (mem[ad] & 0x7f) | (raster > 255 ? 0x80 : 0);
+      if (ad >= 0xd400 && ad < 0xd800) return sid.read(ad & 31);
+      if (ad === 0xdc0d || ad === 0xdd0d) return 0;
+    }
+    return mem[ad];
+  }
+  function wr(ad, val) {
+    mem[ad] = val;
+    if (ad >= 0xd400 && ad < 0xd800) sid.write(ad & 31, val);
+    else if (ad === 0xdc04) cia = (cia & 0xff00) | val;
+    else if (ad === 0xdc05) cia = (cia & 0xff) | (val << 8);
+  }
+  const push = (b) => { mem[0x100 | sp] = b; sp = (sp - 1) & 255; };
+  const pull = () => { sp = (sp + 1) & 255; return mem[0x100 | sp]; };
+  const f8 = () => { const b = rd(pc); pc = (pc + 1) & 0xffff; return b; };
+  const f16 = () => { const l = f8(); return l | (f8() << 8); };
+  const nz = (b) => { fz = (b & 255) ? 0 : 1; fn = (b >> 7) & 1; };
+  const getP = (b) => (fn << 7) | (fv << 6) | 0x20 | (b ? 0x10 : 0) | (fd << 3) | (fi << 2) | (fz << 1) | fc;
+  const setP = (p) => { fn = (p >> 7) & 1; fv = (p >> 6) & 1; fd = (p >> 3) & 1; fi = (p >> 2) & 1; fz = (p >> 1) & 1; fc = p & 1; };
+  const adc = (m) => { const s = a + m + fc; fv = ((~(a ^ m)) & (a ^ s) & 0x80) ? 1 : 0; fc = s > 255 ? 1 : 0; a = s & 255; nz(a); };
+  const cmp = (r, m) => { fc = r >= m ? 1 : 0; nz((r - m) & 255); };
+  const asl = (b) => { fc = (b >> 7) & 1; b = (b << 1) & 255; nz(b); return b; };
+  const lsr = (b) => { fc = b & 1; b >>= 1; nz(b); return b; };
+  const rol = (b) => { const c = fc; fc = (b >> 7) & 1; b = ((b << 1) | c) & 255; nz(b); return b; };
+  const ror = (b) => { const c = fc; fc = b & 1; b = (b >> 1) | (c << 7); nz(b); return b; };
+
+  // modes: 0 izx, 1 zp, 2 imm, 3 abs, 4 izy, 5 zpx, 6 aby, 7 abx, 8 zpy
+  function ea(m) {
+    switch (m) {
+      case 0: { const z = (f8() + x) & 255; return mem[z] | (mem[(z + 1) & 255] << 8); }
+      case 1: return f8();
+      case 2: { const p = pc; pc = (pc + 1) & 0xffff; return p; }
+      case 3: return f16();
+      case 4: { const z = f8(); return ((mem[z] | (mem[(z + 1) & 255] << 8)) + y) & 0xffff; }
+      case 5: return (f8() + x) & 255;
+      case 6: return (f16() + y) & 0xffff;
+      case 7: return (f16() + x) & 0xffff;
+      default: return (f8() + y) & 255;
+    }
+  }
+
+  function step() {
+    const op = rd(pc); pc = (pc + 1) & 0xffff;
+    const cc = op & 3, bbb = (op >> 2) & 7, aaa = op >> 5;
+    let t = 0;
+    if (cc === 1) {
+      if (op === 0x89) { f8(); return; }
+      const ad = ea(bbb);
+      switch (aaa) {
+        case 0: a |= rd(ad); nz(a); break;
+        case 1: a &= rd(ad); nz(a); break;
+        case 2: a ^= rd(ad); nz(a); break;
+        case 3: adc(rd(ad)); break;
+        case 4: wr(ad, a); break;
+        case 5: a = rd(ad); nz(a); break;
+        case 6: cmp(a, rd(ad)); break;
+        default: adc(rd(ad) ^ 255); break;
+      }
+      return;
+    }
+    if (cc === 2) {
+      if (bbb === 2) {
+        switch (aaa) {
+          case 0: a = asl(a); break;
+          case 1: a = rol(a); break;
+          case 2: a = lsr(a); break;
+          case 3: a = ror(a); break;
+          case 4: a = x; nz(a); break;
+          case 5: x = a; nz(x); break;
+          case 6: x = (x - 1) & 255; nz(x); break;
+          default: break;
+        }
+        return;
+      }
+      if (bbb === 6) { if (aaa === 4) sp = x; else if (aaa === 5) { x = sp; nz(x); } return; }
+      if (bbb === 4) { pc = TRAP; return; }
+      if (bbb === 0) { const m = f8(); if (aaa === 5) { x = m; nz(x); } return; }
+      const mode = bbb === 1 ? 1 : bbb === 3 ? 3 : bbb === 5 ? ((aaa === 4 || aaa === 5) ? 8 : 5) : (aaa === 5 ? 6 : 7);
+      const ad = ea(mode);
+      switch (aaa) {
+        case 0: wr(ad, asl(rd(ad))); break;
+        case 1: wr(ad, rol(rd(ad))); break;
+        case 2: wr(ad, lsr(rd(ad))); break;
+        case 3: wr(ad, ror(rd(ad))); break;
+        case 4: if (bbb !== 7) wr(ad, x); break;
+        case 5: x = rd(ad); nz(x); break;
+        case 6: t = (rd(ad) - 1) & 255; wr(ad, t); nz(t); break;
+        default: t = (rd(ad) + 1) & 255; wr(ad, t); nz(t); break;
+      }
+      return;
+    }
+    if (cc === 0) {
+      switch (op) {
+        case 0x00: { const r = (pc + 1) & 0xffff; push(r >> 8); push(r & 255); push(getP(true)); fi = 1;
+          const vec = rd(0xfffe) | (rd(0xffff) << 8); pc = vec ? vec : TRAP; return; }
+        case 0x20: { const l = f8(); const h = rd(pc); push(pc >> 8); push(pc & 255); pc = l | (h << 8); return; }
+        case 0x40: { setP(pull()); const l = pull(); const h = pull(); pc = l | (h << 8); return; }
+        case 0x60: { const l = pull(); const h = pull(); pc = ((l | (h << 8)) + 1) & 0xffff; return; }
+        default: break;
+      }
+      if (bbb === 2) {
+        switch (aaa) {
+          case 0: push(getP(true)); break;
+          case 1: setP(pull()); break;
+          case 2: push(a); break;
+          case 3: a = pull(); nz(a); break;
+          case 4: y = (y - 1) & 255; nz(y); break;
+          case 5: y = a; nz(y); break;
+          case 6: y = (y + 1) & 255; nz(y); break;
+          default: x = (x + 1) & 255; nz(x); break;
+        }
+        return;
+      }
+      if (bbb === 6) {
+        switch (aaa) {
+          case 0: fc = 0; break; case 1: fc = 1; break; case 2: fi = 0; break; case 3: fi = 1; break;
+          case 4: a = y; nz(a); break; case 5: fv = 0; break; case 6: fd = 0; break; default: fd = 1; break;
+        }
+        return;
+      }
+      if (bbb === 4) {
+        const o = f8();
+        const flag = aaa >> 1 === 0 ? fn : aaa >> 1 === 1 ? fv : aaa >> 1 === 2 ? fc : fz;
+        if (flag === (aaa & 1)) pc = (pc + ((o << 24) >> 24)) & 0xffff;
+        return;
+      }
+      if (bbb === 0) {
+        const m = f8();
+        if (aaa === 5) { y = m; nz(y); } else if (aaa === 6) cmp(y, m); else if (aaa === 7) cmp(x, m);
+        return;
+      }
+      if (op === 0x4c) { pc = f16(); return; }
+      if (op === 0x6c) { const p = f16(); const l = rd(p); const h = rd((p & 0xff00) | ((p + 1) & 0xff)); pc = l | (h << 8); return; }
+      const ad = ea(bbb === 1 ? 1 : bbb === 3 ? 3 : bbb === 5 ? 5 : 7);
+      switch (aaa) {
+        case 1: if (bbb === 1 || bbb === 3) { const b = rd(ad); fz = (a & b) ? 0 : 1; fn = b >> 7; fv = (b >> 6) & 1; } break;
+        case 4: if (bbb !== 7) wr(ad, y); break;
+        case 5: y = rd(ad); nz(y); break;
+        case 6: if (bbb === 1 || bbb === 3) cmp(y, rd(ad)); break;
+        case 7: if (bbb === 1 || bbb === 3) cmp(x, rd(ad)); break;
+        default: break;
+      }
+      return;
+    }
+    // cc === 3: common undocumented opcodes
+    if (bbb === 2) {
+      const m = f8();
+      switch (aaa) {
+        case 0: case 1: a &= m; nz(a); fc = fn; break;
+        case 2: a &= m; fc = a & 1; a >>= 1; nz(a); break;
+        case 3: a &= m; a = (a >> 1) | (fc << 7); nz(a); fc = (a >> 6) & 1; fv = ((a >> 6) ^ (a >> 5)) & 1; break;
+        case 4: a = x & m; nz(a); break;
+        case 5: a = x = m; nz(a); break;
+        case 6: t = (a & x) - m; fc = t >= 0 ? 1 : 0; x = t & 255; nz(x); break;
+        default: adc(m ^ 255); break;
+      }
+      return;
+    }
+    const mode = bbb === 5 ? ((aaa === 4 || aaa === 5) ? 8 : 5) : bbb === 7 ? (aaa === 5 ? 6 : 7) : bbb;
+    const ad = ea(mode);
+    switch (aaa) {
+      case 0: t = asl(rd(ad)); wr(ad, t); a |= t; nz(a); break;
+      case 1: t = rol(rd(ad)); wr(ad, t); a &= t; nz(a); break;
+      case 2: t = lsr(rd(ad)); wr(ad, t); a ^= t; nz(a); break;
+      case 3: t = ror(rd(ad)); wr(ad, t); adc(t); break;
+      case 4: if (bbb !== 4 && bbb !== 6 && bbb !== 7) wr(ad, a & x); break;
+      case 5: a = x = rd(ad); nz(a); break;
+      case 6: t = (rd(ad) - 1) & 255; wr(ad, t); cmp(a, t); break;
+      default: t = (rd(ad) + 1) & 255; wr(ad, t); adc(t ^ 255); break;
+    }
+  }
+
+  function call(addr, A, irq) {
+    a = A; x = 0; y = 0; sp = 0xff; fi = 0;
+    if (irq) { push(TRAP >> 8); push(TRAP & 255); push(getP(false)); }
+    else { push((TRAP - 1) >> 8); push((TRAP - 1) & 255); }
+    pc = addr;
+    let n = 0;
+    while (!KEND[pc] && n < MAXI) { step(); n++; }
+    return n;
+  }
+
+  function start(t, n) {
+    tune = t; song = n;
+    mem.fill(0);
+    mem.set(t.data, t.load);
+    mem[1] = 0x37; mem[0x314] = 0x31; mem[0x315] = 0xea;
+    cia = 0; raster = 0;
+    sid.reset();
+    call(t.init, n - 1, false);
+    playAddr = t.play; irqStyle = false;
+    if (!playAddr) {
+      const vec = mem[0x314] | (mem[0x315] << 8);
+      if (vec && vec !== 0xea31) { playAddr = vec; irqStyle = true; }
+      else { const v2 = mem[0xfffe] | (mem[0xffff] << 8); if (v2) { playAddr = v2; irqStyle = true; } }
+    }
+    const bit = (t.speed >>> ((n - 1) % 32)) & 1;
+    hz = t.clock === PAL_CLOCK ? t.clock / 19656 : t.clock / 17095;
+    if (bit) hz = cia ? t.clock / cia : 60;
+    hz = Math.max(20, Math.min(1000, hz));
+    return hz;
+  }
+  function frame() { if (playAddr) call(playAddr, 0, irqStyle); }
+  return { start, frame, get hz() { return hz; }, get playAddr() { return playAddr; }, mem };
+}
+
+/* ---------- Audio core: runs inside an AudioWorklet, or on the main thread as a fallback ---------- */
+class SidCore {
+  constructor(rate, post) {
+    this.rate = rate; this.post = post;
+    this.sid = makeSid(); this.sid.setup(rate);
+    this.m = makeMachine(this.sid);
+    this.tune = null; this.song = 1; this.playing = false;
+    this.hz = 50; this.left = 0; this.elapsed = 0;
+    this.vis = new Float32Array(1024); this.vi = 0;
+  }
+  msg(d) {
+    switch (d.type) {
+      case 'load': this.tune = d.tune; this.begin(d.song); break;
+      case 'song': if (this.tune) this.begin(d.song); break;
+      case 'play': this.playing = !!d.on; break;
+      case 'mute': this.sid.v[d.i].mute = !!d.m; break;
+      case 'set': this.sid.set(d.s); break;
+      default: break;
+    }
+  }
+  begin(song) {
+    try {
+      this.sid.reset();
+      this.hz = this.m.start(this.tune, song);
+      this.song = song; this.left = 0; this.elapsed = 0;
+      this.post({ type: 'started', song, hz: this.hz, playAddr: this.m.playAddr });
+    } catch (err) {
+      this.post({ type: 'error', message: String(err && err.message || err) });
+    }
+  }
+  render(L, R, n) {
+    if (!this.playing || !this.tune) { L.fill(0); if (R) R.fill(0); return; }
+    const sid = this.sid, o = sid.out, cps = this.tune.clock / this.rate;
+    for (let i = 0; i < n; i++) {
+      while (this.left <= 0) { this.m.frame(); this.left += this.rate / this.hz; this.elapsed += 1 / this.hz; }
+      this.left -= 1;
+      sid.sample(cps);
+      L[i] = o.l; if (R) R[i] = o.r;
+      this.vis[this.vi++] = (o.l + o.r) * 0.5;
+      if (this.vi === 1024) {
+        this.post({ type: 'vis', scope: this.vis, t: this.elapsed,
+          v: [0, 1, 2].map(k => [sid.v[k].freq, sid.v[k].ctrl, sid.v[k].level]) });
+        this.vis = new Float32Array(1024); this.vi = 0;
+      }
+    }
+  }
+}
+//ENGINE-END
+
+</script>
+<script id="worklet" type="text/plain">
+class SidProc extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.core = new SidCore(sampleRate, (d) => this.port.postMessage(d));
+    this.port.onmessage = (e) => this.core.msg(e.data);
+  }
+  process(inputs, outputs) {
+    const out = outputs[0];
+    this.core.render(out[0], out[1] || null, out[0].length);
+    return true;
+  }
+}
+registerProcessor('sid-proc', SidProc);
+
+</script>
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const engineSrc = $('engine').textContent;
+  const workletSrc = $('worklet').textContent;
+  const E = new Function(engineSrc + '\nreturn { parseSid, buildDemo, SidCore, PAL_CLOCK, NTSC_CLOCK };')();
+  const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const hex4 = (n) => '$' + n.toString(16).toUpperCase().padStart(4, '0');
+  const val = (id) => Number($(id).value);
+
+  let ctx = null, gain = null, dry = null, wet = null, conv = null, hp = null, chorusGain = null, shelf = null;
+  let backend = null, backendStarting = false, srcNode = null;
+  const pending = [];
+  let tune = null, song = 1, playing = false, hz = 50, playAddr = 0, elapsed = 0, lock = null;
+  let chip = '6581';
+  const scopeBuf = new Float32Array(2048); let scopeIdx = 0;
+  let voices = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  const muted = [false, false, false];
+
+  const el = { drop: $('drop'), file: $('file'), demo: $('demo'), play: $('play'), prev: $('prev'), next: $('next'),
+    songInfo: $('songInfo'), time: $('time'), vol: $('vol'), meta: $('meta'), canvas: $('scope') };
+
+  function send(m) { if (backend) backend.send(m); else pending.push(m); }
+
+  function onCore(d) {
+    if (d.type === 'vis') {
+      const s = d.scope;
+      for (let i = 0; i < s.length; i++) scopeBuf[scopeIdx++ & 2047] = s[i];
+      voices = d.v; elapsed = d.t;
+    } else if (d.type === 'started') {
+      hz = d.hz; playAddr = d.playAddr; song = d.song; elapsed = 0; setInfo();
+    } else if (d.type === 'error') {
+      showMsg('Could not start this tune: ' + d.message, true);
+    }
+  }
+
+  function makeIR(c) {
+    const len = Math.floor(c.sampleRate * 1.8), pre = Math.floor(c.sampleRate * 0.012);
+    const b = c.createBuffer(2, len, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = b.getChannelData(ch); let lp = 0;
+      for (let i = pre; i < len; i++) {
+        const k = (i - pre) / (len - pre);
+        lp += 0.35 * ((Math.random() * 2 - 1) - lp);
+        d[i] = lp * Math.pow(1 - k, 2.5) * 0.5;
+      }
+    }
+    return b;
+  }
+
+  function applySound() {
+    send({ type: 'set', s: {
+      clean: $('clean').checked, smooth: val('smooth') / 100, drive: val('drive') / 100, chip,
+      vol: [val('vol0') / 100, val('vol1') / 100, val('vol2') / 100],
+      pan: [val('pan0') / 100, val('pan1') / 100, val('pan2') / 100] } });
+    if (wet) wet.gain.value = val('rev') / 100 * 0.9;
+    if (chorusGain) chorusGain.gain.value = val('chorus') / 100 * 0.7;
+    if (shelf) shelf.gain.value = val('bass') / 100 * 8;
+  }
+
+  function buildGraph(c) {
+    gain = c.createGain(); gain.gain.value = val('vol') / 100;
+    const comp = c.createDynamicsCompressor();
+    comp.threshold.value = -16; comp.knee.value = 14; comp.ratio.value = 3; comp.attack.value = 0.006; comp.release.value = 0.25;
+    shelf = c.createBiquadFilter(); shelf.type = 'lowshelf'; shelf.frequency.value = 140;
+    dry = c.createGain();
+    wet = c.createGain(); conv = c.createConvolver(); conv.buffer = makeIR(c);
+    hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 220;
+    chorusGain = c.createGain();
+    const dA = c.createDelay(0.1), dB = c.createDelay(0.1);
+    dA.delayTime.value = 0.020; dB.delayTime.value = 0.027;
+    const mk = (rate, depth, target) => {
+      const o = c.createOscillator(); o.frequency.value = rate;
+      const g = c.createGain(); g.gain.value = depth;
+      o.connect(g); g.connect(target.delayTime); o.start();
+    };
+    mk(0.71, 0.0025, dA); mk(0.93, 0.0032, dB);
+    hp.connect(dA); hp.connect(dB); dA.connect(chorusGain); dB.connect(chorusGain);
+    conv.connect(wet);
+    dry.connect(shelf); wet.connect(shelf); chorusGain.connect(shelf);
+    shelf.connect(comp); comp.connect(gain); gain.connect(c.destination);
+  }
+
+  async function startBackend() {
+    if (backend || backendStarting) return;
+    backendStarting = true;
+    let ok = false;
+    if (ctx.audioWorklet && window.AudioWorkletNode) {
+      try {
+        const url = URL.createObjectURL(new Blob([engineSrc + '\n' + workletSrc], { type: 'text/javascript' }));
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        const wn = new AudioWorkletNode(ctx, 'sid-proc', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+        wn.port.onmessage = (e) => onCore(e.data);
+        srcNode = wn; backend = { send: (m) => wn.port.postMessage(m), kind: 'worklet' }; ok = true;
+      } catch (err) { ok = false; }
+    }
+    if (!ok) {
+      const core = new E.SidCore(ctx.sampleRate, onCore);
+      const sp = ctx.createScriptProcessor(4096, 0, 2);
+      sp.onaudioprocess = (e) => { const L = e.outputBuffer.getChannelData(0), R = e.outputBuffer.getChannelData(1); core.render(L, R, L.length); };
+      srcNode = sp; backend = { send: (m) => core.msg(m), kind: 'main-thread' };
+    }
+    srcNode.connect(dry); srcNode.connect(conv); srcNode.connect(hp);
+    backendStarting = false;
+    while (pending.length) backend.send(pending.shift());
+    applySound();
+  }
+
+  function ensureCtx() {
+    if (ctx) return ctx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { showMsg('This browser does not support Web Audio.', true); return null; }
+    try { ctx = new AC({ sampleRate: 32000, latencyHint: 'playback' }); } catch (e) { ctx = new AC(); }
+    buildGraph(ctx);
+    applySound();
+    startBackend();
+    return ctx;
+  }
+  const arm = () => { ensureCtx(); };
+  document.addEventListener('pointerdown', arm, { once: true });
+  document.addEventListener('keydown', arm, { once: true });
+
+  function showMsg(text, isErr) {
+    el.drop.textContent = text;
+    el.drop.classList.toggle('err', !!isErr);
+  }
+
+  function setInfo() {
+    $('iTitle').textContent = tune.title || '(untitled)';
+    $('iAuthor').textContent = tune.author || '-';
+    $('iRel').textContent = tune.released || '-';
+    const clk = tune.clock === E.PAL_CLOCK ? 'PAL' : 'NTSC';
+    el.meta.textContent = tune.type + ' v' + tune.version + ' · ' + clk + ' · load ' + hex4(tune.load) +
+      ' · init ' + hex4(tune.init) + ' · play ' + (playAddr ? hex4(playAddr) : 'none') + ' · ' + hz.toFixed(1) + ' Hz' +
+      (backend ? ' · ' + backend.kind : '');
+    el.songInfo.textContent = 'SONG ' + song + '/' + tune.songs;
+    el.prev.disabled = tune.songs < 2; el.next.disabled = tune.songs < 2;
+    el.play.disabled = false;
+  }
+
+  async function setPlaying(on) {
+    if (on) {
+      const c = ensureCtx();
+      if (!c) return;
+      try { await c.resume(); } catch (e) { /* needs a tap */ }
+      if (c.state !== 'running') { showMsg('Tap Play to start the sound.'); playing = false; send({ type: 'play', on: false }); refreshPlay(); return; }
+      playing = true; send({ type: 'play', on: true });
+      try { if (navigator.wakeLock) lock = await navigator.wakeLock.request('screen'); } catch (e) { lock = null; }
+    } else {
+      playing = false; send({ type: 'play', on: false });
+      try { if (lock) await lock.release(); } catch (e) { /* ignore */ }
+      lock = null;
+    }
+    refreshPlay();
+  }
+  function refreshPlay() { el.play.textContent = playing ? 'Pause' : 'Play'; }
+
+  function loadBuffer(buf, label) {
+    let t;
+    try { t = E.parseSid(buf); } catch (err) { showMsg(err.message, true); return; }
+    tune = t; song = t.start; playAddr = 0; elapsed = 0;
+    ensureCtx();
+    send({ type: 'load', tune: t, song: t.start });
+    setInfo();
+    showMsg('Loaded ' + label + ' (' + t.size + ' bytes).');
+    setPlaying(true);
+  }
+
+  async function loadFile(file) {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { showMsg('That file is too large for a SID file.', true); return; }
+    try {
+      const buf = file.arrayBuffer ? await file.arrayBuffer() : await new Promise((res, rej) => {
+        const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsArrayBuffer(file);
+      });
+      loadBuffer(buf, file.name);
+    } catch (err) { showMsg('Could not read that file.', true); }
+  }
+
+  el.file.addEventListener('change', () => { loadFile(el.file.files[0]); el.file.value = ''; });
+  el.demo.addEventListener('click', () => { ensureCtx(); loadBuffer(E.buildDemo(), 'the demo tune'); });
+  el.play.addEventListener('click', () => { if (tune) setPlaying(!playing); });
+  const changeSong = (d) => {
+    if (!tune || tune.songs < 2) return;
+    const n = ((song - 1 + d + tune.songs) % tune.songs) + 1;
+    song = n; send({ type: 'song', song: n }); if (!playing) setPlaying(true);
+  };
+  el.prev.addEventListener('click', () => changeSong(-1));
+  el.next.addEventListener('click', () => changeSong(1));
+  el.vol.addEventListener('input', () => { if (gain) gain.gain.value = val('vol') / 100; });
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && tune && !/^(INPUT|BUTTON|TEXTAREA|SUMMARY)$/.test(e.target.tagName)) { e.preventDefault(); setPlaying(!playing); }
+  });
+
+  const screen = $('screen');
+  ['dragenter', 'dragover'].forEach(ev => screen.addEventListener(ev, (e) => { e.preventDefault(); el.drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => screen.addEventListener(ev, (e) => { e.preventDefault(); el.drop.classList.remove('over'); }));
+  screen.addEventListener('drop', (e) => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) { ensureCtx(); loadFile(f); } });
+
+  /* ----- sound controls ----- */
+  const sliderIds = ['rev', 'chorus', 'smooth', 'drive', 'bass', 'width', 'vol0', 'vol1', 'vol2', 'pan0', 'pan1', 'pan2'];
+  function setWidth(w) { $('pan0').value = -w; $('pan1').value = 0; $('pan2').value = w; }
+  sliderIds.forEach(id => $(id).addEventListener('input', () => { if (id === 'width') setWidth(val('width')); applySound(); }));
+  $('clean').addEventListener('change', applySound);
+  function setChip(c) {
+    chip = c;
+    $('chip6581').setAttribute('aria-pressed', c === '6581' ? 'true' : 'false');
+    $('chip8580').setAttribute('aria-pressed', c === '8580' ? 'true' : 'false');
+    applySound();
+  }
+  $('chip6581').addEventListener('click', () => setChip('6581'));
+  $('chip8580').addEventListener('click', () => setChip('8580'));
+  const presets = {
+    warm:  { chip: '6581', clean: 1, rev: 20, chorus: 15, smooth: 35, drive: 20, bass: 20, width: 40 },
+    clean: { chip: '8580', clean: 1, rev: 15, chorus: 10, smooth: 25, drive: 0,  bass: 10, width: 40 },
+    wide:  { chip: '6581', clean: 1, rev: 40, chorus: 55, smooth: 30, drive: 20, bass: 25, width: 90 },
+    raw:   { chip: '6581', clean: 0, rev: 0,  chorus: 0,  smooth: 0,  drive: 0,  bass: 0,  width: 0 }
+  };
+  document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
+    const p = presets[b.dataset.preset];
+    ['rev', 'chorus', 'smooth', 'drive', 'bass', 'width'].forEach(k => { $(k).value = p[k]; });
+    $('clean').checked = !!p.clean;
+    for (let i = 0; i < 3; i++) $('vol' + i).value = 100;
+    setWidth(p.width);
+    setChip(p.chip);
+  }));
+  setWidth(val('width'));
+
+  const rows = [0, 1, 2].map(i => {
+    const row = $('v' + i);
+    const o = { row, fill: row.querySelector('.bar i'), note: row.querySelector('.note'), mute: row.querySelector('.mute') };
+    o.mute.addEventListener('click', () => {
+      muted[i] = !muted[i]; send({ type: 'mute', i, m: muted[i] });
+      o.mute.setAttribute('aria-pressed', muted[i] ? 'true' : 'false'); o.row.classList.toggle('muted', muted[i]);
+    });
+    return o;
+  });
+
+
+  /* ----- copy settings ----- */
+  function settingsText() {
+    const sm = val('smooth'), cut = sm <= 0 ? null : Math.round(16000 * Math.pow(3000 / 16000, sm / 100));
+    const bassDb = (val('bass') / 100 * 8).toFixed(1);
+    const L = [];
+    L.push('Breadbin SID Player settings');
+    if (tune) L.push('Tune: ' + (tune.title || '(untitled)') + (tune.author ? ' by ' + tune.author : '') + ', song ' + song + '/' + tune.songs);
+    L.push('');
+    L.push('Chip model: ' + chip + (chip === '6581'
+      ? ' (cutoff 220 Hz + 9000 Hz x (fc/2047)^4, weaker combined waveforms)'
+      : ' (cutoff 30 Hz + 14000 Hz x fc/2047, plain AND combined waveforms)'));
+    L.push('Clean oscillators (anti-aliased saw and pulse): ' + ($('clean').checked ? 'on' : 'off'));
+    L.push('Output sample rate: ' + (ctx ? ctx.sampleRate : 32000) + ' Hz');
+    L.push('Audio engine: ' + (backend ? backend.kind : 'not started yet'));
+    L.push('');
+    L.push('Sliders (0 to 100)');
+    L.push('Reverb: ' + val('rev'));
+    L.push('Chorus: ' + val('chorus'));
+    L.push('Smooth: ' + sm + (cut ? ' (lowpass at about ' + cut + ' Hz)' : ' (off)'));
+    L.push('Drive: ' + val('drive') + ' (filter saturation)');
+    L.push('Bass: ' + val('bass') + ' (low shelf +' + bassDb + ' dB at 140 Hz)');
+    L.push('Width: ' + val('width') + ' (voice 1 left, voice 2 centre, voice 3 right)');
+    L.push('');
+    L.push('Voice mixer (volume 0 to 150, pan -100 left to 100 right)');
+    for (let i = 0; i < 3; i++) L.push('V' + (i + 1) + ': volume ' + val('vol' + i) + ', pan ' + val('pan' + i) + (muted[i] ? ', muted' : ''));
+    L.push('Master volume: ' + val('vol'));
+    L.push('');
+    L.push('How each effect is built');
+    L.push('Reverb: convolution with a generated stereo impulse response, 1.8 s decaying noise tail, 12 ms pre-delay, wet level = slider x 0.9, dry stays at full.');
+    L.push('Chorus: two delay lines (20 ms and 27 ms) modulated by sine LFOs at 0.71 Hz and 0.93 Hz, depth 2.5 ms and 3.2 ms, fed through a 220 Hz high-pass so the bass stays tight, level = slider x 0.7.');
+    L.push('Stereo width: equal-power pan per voice, applied before the filter so each filtered voice keeps its position.');
+    L.push('Smooth: one-pole lowpass on the output, cutoff 16000 Hz x (3000/16000)^(slider/100).');
+    L.push('Drive: soft saturation inside the filter, strength = slider/100 x 0.6.');
+    L.push('Filter: state-variable, run at 2x the output rate. Resonance damping = 1.4 - 1.05 x res/15.');
+    L.push('Master chain: low shelf, compressor (threshold -16 dB, knee 14 dB, ratio 3:1, attack 6 ms, release 250 ms), master volume.');
+    L.push('Before the effects: DC blocker (about 15 Hz) and a soft limiter.');
+    L.push('');
+    L.push('JSON: ' + JSON.stringify({ chip, clean: $('clean').checked, rev: val('rev'), chorus: val('chorus'), smooth: sm,
+      drive: val('drive'), bass: val('bass'), width: val('width'),
+      vol: [val('vol0'), val('vol1'), val('vol2')], pan: [val('pan0'), val('pan1'), val('pan2')], master: val('vol') }));
+    return L.join('\n');
+  }
+  let copyTimer = 0;
+  function flashCopy(label) {
+    const b = $('copySettings'); b.textContent = label;
+    clearTimeout(copyTimer); copyTimer = setTimeout(() => { b.textContent = 'Copy settings'; }, 1800);
+  }
+  $('copySettings').addEventListener('click', async () => {
+    const text = settingsText();
+    const ta = $('copyFallback');
+    try {
+      await navigator.clipboard.writeText(text);
+      ta.hidden = true; flashCopy('Copied');
+    } catch (e) {
+      ta.value = text; ta.hidden = false; ta.focus(); ta.select();
+      try { if (document.execCommand('copy')) { flashCopy('Copied'); return; } } catch (e2) { /* fall through */ }
+      flashCopy('Select and copy below');
+    }
+  });
+
+  /* ----- scope and meters ----- */
+  const cv = el.canvas, g = cv.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const colLine = css.getPropertyValue('--line').trim() || '#4d409f';
+  const colTrace = css.getPropertyValue('--v1').trim() || '#9ad284';
+  function fit() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  }
+  window.addEventListener('resize', fit);
+  function waveName(ctrl) {
+    const s = ctrl >> 4; const n = [];
+    if (s & 1) n.push('TRI'); if (s & 2) n.push('SAW'); if (s & 4) n.push('PUL'); if (s & 8) n.push('NOI');
+    return n.length ? n.join('+') : '---';
+  }
+  function noteOf(freq, clock) {
+    const f = freq * clock / 16777216;
+    if (f < 8) return '--';
+    const m = Math.round(12 * Math.log2(f / 440) + 69);
+    if (m < 0 || m > 127) return '--';
+    return noteNames[m % 12] + (Math.floor(m / 12) - 1);
+  }
+
+  function draw() {
+    fit();
+    const W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = colLine; g.lineWidth = 1;
+    g.beginPath();
+    for (let i = 1; i < 4; i++) { const yy = Math.round(H * i / 4) + 0.5; g.moveTo(0, yy); g.lineTo(W, yy); }
+    for (let i = 1; i < 8; i++) { const xx = Math.round(W * i / 8) + 0.5; g.moveTo(xx, 0); g.lineTo(xx, H); }
+    g.stroke();
+    const N = 1000, base = scopeIdx - 2048;
+    let st = 0;
+    if (playing) for (let i = 1; i < 1000; i++) { if (scopeBuf[(base + i - 1) & 2047] < 0 && scopeBuf[(base + i) & 2047] >= 0) { st = i; break; } }
+    g.strokeStyle = colTrace; g.lineWidth = Math.max(2, Math.round(H / 70));
+    g.lineJoin = 'round'; g.beginPath();
+    for (let i = 0; i < N; i++) {
+      const s = playing ? scopeBuf[(base + st + i) & 2047] : 0;
+      const xx = i / (N - 1) * W, yy = H / 2 - s * H * 0.46;
+      if (i === 0) g.moveTo(xx, yy); else g.lineTo(xx, yy);
+    }
+    g.stroke();
+
+    const clock = tune ? tune.clock : E.PAL_CLOCK;
+    for (let i = 0; i < 3; i++) {
+      const [f, ct, lv] = voices[i], r = rows[i];
+      const on = playing && tune && (ct >> 4) && !muted[i];
+      r.fill.style.transform = 'scaleX(' + (on ? lv / 255 : 0).toFixed(3) + ')';
+      r.note.textContent = on && lv > 0 ? waveName(ct) + ' ' + noteOf(f, clock) : '--';
+    }
+    if (tune) {
+      const s = Math.floor(elapsed), mm = Math.floor(s / 60), ss = s % 60;
+      el.time.textContent = String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0');
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+
+</body>
+</html>

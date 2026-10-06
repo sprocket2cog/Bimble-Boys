@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Bimble Road Twist Lab</title>
+<style>
+:root{--bg:#0b0f0a;--pan:#141a12;--ln:#2c3a28;--tx:#e8f5d8;--dim:#8fa588;--hi:#ffd23a;--red:#ff4a3a;--grn:#8dff6a}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:13px/1.3 ui-monospace,Menlo,Consolas,monospace;overflow:hidden;touch-action:manipulation}
+#app{display:flex;flex-direction:column;height:100%;max-width:560px;margin:0 auto}
+#top{flex:0 0 auto;position:relative;background:#000}
+canvas{display:block;image-rendering:pixelated}
+#cv{margin:0 auto}
+#bar{margin:0 auto;border-top:1px solid #000}
+#now{padding:4px 8px;color:var(--hi);min-height:22px;font-size:12px;display:flex;justify-content:space-between;gap:8px;background:#0e130d}
+#now span:last-child{color:var(--dim)}
+/* the scroll bar sits on the LEFT: the panel is flipped, its content flipped back */
+#pan{flex:1 1 auto;overflow-y:auto;direction:rtl;background:var(--pan);border-top:2px solid var(--ln);-webkit-overflow-scrolling:touch}
+#pan::-webkit-scrollbar{width:16px}
+#pan::-webkit-scrollbar-track{background:#0a0e09}
+#pan::-webkit-scrollbar-thumb{background:#4b6a3e;border-radius:8px;border:3px solid #0a0e09}
+#in{direction:ltr;padding:8px 12px 28px}
+.row{margin:0 0 9px}
+.row .t{display:flex;justify-content:space-between;align-items:baseline}
+.row .t b{color:var(--hi);font-weight:700}
+.row .d{color:var(--dim);font-size:11px;margin:1px 0 2px}
+input[type=range]{width:100%;height:30px;margin:0;accent-color:#7bd957;touch-action:pan-y}
+.btns{display:flex;flex-wrap:wrap;gap:7px;margin:6px 0 10px}
+button{font:inherit;color:var(--tx);background:#1d2a19;border:1px solid #4b6a3e;border-radius:9px;padding:10px 12px;min-height:42px;cursor:pointer;touch-action:manipulation}
+button.on{background:#2c5b22;border-color:var(--grn);color:var(--grn)}
+button.big{flex:1 1 100%;background:#2c5b22;border-color:var(--grn);color:var(--grn);font-weight:700}
+h3{margin:12px 0 4px;color:var(--hi);font-size:13px;letter-spacing:.06em}
+textarea{width:100%;height:96px;background:#080c07;color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:8px;font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;resize:none}
+#st{color:var(--dim);font-size:11px;margin-top:4px}
+</style></head><body>
+<div id="app">
+ <div id="top"><canvas id="cv"></canvas><canvas id="bar"></canvas>
+  <div id="now"><span id="nowL">-</span><span id="nowR">-</span></div></div>
+ <div id="pan"><div id="in">
+  <div class="btns"><button id="bPause">PAUSE</button><button id="bSeed">NEW SEED</button><button id="bDef">DEFAULTS</button></div>
+  <h3>THE TWO MAIN DIALS</h3><div id="sMain"></div>
+  <h3>LANE AND EASING</h3><div id="sLane"></div>
+  <h3>SHAPE OF THE PLAN</h3><div id="sShape"></div>
+  <h3>VIEW</h3><div id="sView"></div>
+  <div class="btns" id="tg"></div>
+  <h3>SETTINGS FOR THE GAME</h3>
+  <textarea id="out" readonly inputmode="none"></textarea>
+  <div class="btns"><button class="big" id="bCopy">COPY SETTINGS</button></div>
+  <div id="st"></div>
+ </div></div>
+</div>
+<script>
+(()=>{
+'use strict';
+const $=id=>document.getElementById(id);
+const cv=$('cv'),ctx=cv.getContext('2d'),bar=$('bar'),bx=bar.getContext('2d');
+const wc=document.createElement('canvas'),wx=wc.getContext('2d');
+const DEF={twist:40,lane:25,laneW:70,ease:160,bend:12,wave:1100,bridge:10,secLen:100,seed:1234,speed:220,strip:3,shear:1,scale:1};
+const P=Object.assign({},DEF);
+// ---------- sliders ----------
+const SL=[
+ ['sMain','twist','TWIST',0,100,1,'%','How much the road bends. 0 = dead straight.'],
+ ['sMain','lane','LANEWAY',0,100,1,'%','Share of the level spent in narrow lane sections.'],
+ ['sLane','laneW','LANE WIDTH',40,95,1,'%','Road width inside a laneway, as a share of normal.'],
+ ['sLane','ease','EASING',40,700,5,' px','Distance over which every change (width, bend) blends in.'],
+ ['sShape','bend','BEND SIZE',3,25,1,'%','Biggest sideways shift, as a share of screen width.'],
+ ['sShape','wave','BEND LENGTH',300,2600,10,' px','Distance for one full swing. Short = tight and busy.'],
+ ['sShape','bridge','BRIDGES',0,40,1,'%','Share of the level that is a straight, full width bridge.'],
+ ['sShape','secLen','SECTION LENGTH',50,200,5,'%','Scales how long each section runs.'],
+ ['sView','speed','SCROLL SPEED',0,700,10,' px/s','Preview speed only.']
+];
+const rowsEl={};
+for(const [host,k,lab,mn,mx,stp,u,desc] of SL){
+  const d=document.createElement('div');d.className='row';
+  d.innerHTML='<div class="t"><span>'+lab+'</span><b id="v_'+k+'"></b></div><div class="d">'+desc+'</div><input type="range" id="r_'+k+'" min="'+mn+'" max="'+mx+'" step="'+stp+'">';
+  $(host).appendChild(d);rowsEl[k]={u,inp:d.querySelector('input'),val:d.querySelector('b')};
+  rowsEl[k].inp.addEventListener('input',()=>{P[k]=+rowsEl[k].inp.value;sync(k);replan();});
+}
+function sync(only){
+  for(const k in rowsEl){if(only&&k!==only)continue;rowsEl[k].inp.value=P[k];rowsEl[k].val.textContent=P[k]+rowsEl[k].u;}
+  out();
+}
+// toggles
+const TG=[['shear','SHEAR (BENDS)'],['scale','SCALE (LANES)']];
+const tgEl=$('tg');
+for(const [k,l] of TG){const b=document.createElement('button');b.id='t_'+k;b.onclick=()=>{P[k]=P[k]?0:1;paintTg();};tgEl.appendChild(b);}
+const bStrip=document.createElement('button');bStrip.onclick=()=>{const o=[2,3,4,6,8],i=o.indexOf(P.strip);P.strip=o[(i+1)%o.length];paintTg();};tgEl.appendChild(bStrip);
+function paintTg(){for(const [k,l] of TG){const b=$('t_'+k);b.textContent=l+': '+(P[k]?'ON':'OFF');b.classList.toggle('on',!!P[k]);}bStrip.textContent='STRIP HEIGHT: '+P.strip+' PX';}
+// ---------- sizes ----------
+let cw=0,ch=0,W=0,M=0,RW=0,vw=0,hw=0,hedgeTile=null,grassP=null,roadP=null,TILE=64;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function hash(n){n=Math.imul(n^0x9e3779b9,0x85ebca6b);n^=n>>>13;n=Math.imul(n,0xc2b2ae35);n^=n>>>16;return (n>>>0)/4294967296;}
+function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function noiseTile(n,cols,seed){const c=document.createElement('canvas');c.width=c.height=n;const x=c.getContext('2d'),r=mulberry(seed);x.fillStyle=cols[0];x.fillRect(0,0,n,n);
+  for(let i=0;i<n*n*.35;i++){x.fillStyle=cols[1+Math.floor(r()*(cols.length-1))];x.fillRect(Math.floor(r()*n),Math.floor(r()*n),1+(r()<.15?1:0),1);}return c;}
+function resize(){
+  cw=Math.min(innerWidth,560);ch=Math.round(clamp(innerHeight*.5,220,640));
+  M=Math.round(cw*.75);W=cw+2*M;
+  cv.width=cw;cv.height=ch;wc.width=W;wc.height=ch;bar.width=cw;bar.height=24;
+  RW=Math.round(cw*.5);vw=Math.round(clamp(cw*.028,10,40));hw=Math.round(clamp(cw*.045,18,70));
+  ctx.imageSmoothingEnabled=false;wx.imageSmoothingEnabled=false;
+  const g=noiseTile(128,['#3f7a2e','#468534','#37692a','#4c8f39','#5a9a42'],5);grassP=wx.createPattern(g,'repeat');
+  const r=noiseTile(64,['#4a4a4e','#55555a','#434347','#5d5d62'],9);roadP=wx.createPattern(r,'repeat');
+  // hedge tile: dense dark bushes
+  hedgeTile=document.createElement('canvas');hedgeTile.width=hw;hedgeTile.height=TILE;const h=hedgeTile.getContext('2d'),rr=mulberry(77);
+  h.fillStyle='#1f4a1c';h.fillRect(0,0,hw,TILE);
+  for(let i=0;i<24;i++){const x=rr()*hw,y=rr()*TILE,R=4+rr()*7;for(const dy of[-TILE,0,TILE]){h.fillStyle=['#2d6a26','#276021','#357a2c','#1c4219'][i%4];h.beginPath();h.arc(x,y+dy,R,0,6.283);h.fill();}}
+  replan();
+}
+// ---------- plan: a list of road sections ----------
+let secs=[],pr=null,tot={},totAll=0,endP=0;
+const LEN={open:[700,1500],twist:[600,1200],lane:[500,1000],bridge:[350,600]};
+function shares(){
+  let L=P.lane/100,B=Math.min(P.bridge/100,.4);if(L+B>1){const k=1/(L+B);L*=k;B*=k;}
+  const rest=Math.max(0,1-L-B),T=P.twist/100*.6*rest;
+  return{open:Math.max(0,rest-T),twist:T,lane:L,bridge:B};
+}
+function replan(){pr=mulberry(P.seed|0);secs=[];tot={open:0,twist:0,lane:0,bridge:0};totAll=0;endP=-300;ensure(scroll+ch+4000);}
+function addSection(){
+  const sh=shares(),prev=secs.length?secs[secs.length-1].type:null;
+  let best=null,bs=-9;
+  const cands=['open','twist','lane','bridge'].filter(t=>sh[t]>0);
+  const ok=t=>t!==prev&&!((t==='bridge'&&prev==='lane')||(t==='lane'&&prev==='bridge'));
+  let list=cands.filter(ok);if(!list.length)list=cands.length?cands:['open'];
+  for(const t of list){const sc=sh[t]-(totAll?tot[t]/totAll:0)+pr()*.14;if(sc>bs){bs=sc;best=t;}}
+  const [lo,hi]=LEN[best];let len=(lo+pr()*(hi-lo))*P.secLen/100;len=Math.max(len,P.ease*1.3);
+  secs.push({type:best,a:endP,b:endP+len});endP+=len;tot[best]+=len;totAll+=len;
+}
+function ensure(p){let g=0;while(endP<p&&g++<400)addSection();}
+function secAt(p){let lo=0,hi=secs.length-1;while(lo<hi){const m=(lo+hi+1)>>1;if(secs[m].a<=p)lo=m;else hi=m-1;}return lo;}
+const sstep=t=>t*t*(3-2*t);
+function blendVal(p,get){
+  const i=secAt(p),s=secs[i],E=P.ease;let v=get(s.type);
+  if(i>0&&p-s.a<E/2)v=get(secs[i-1].type)+(v-get(secs[i-1].type))*sstep((p-s.a+E/2)/E);
+  else if(i<secs.length-1&&s.b-p<E/2)v=v+(get(secs[i+1].type)-v)*sstep((p-s.b+E/2)/E);
+  return v;
+}
+const gScale=t=>t==='lane'?P.laneW/100:1;
+const FACT={open:.35,twist:1,lane:.5,bridge:0};
+const gAmp=t=>FACT[t];
+function scaleAt(p){return blendVal(p,gScale);}
+let ph1=0,ph2=0;
+function shiftAt(p){
+  const A=P.bend/100*cw*Math.pow(P.twist/100,.7),a=blendVal(p,gAmp),L=P.wave;
+  return A*a*(.62*Math.sin(6.2832*p/L+ph1)+.38*Math.sin(6.2832*p/(L*.43)+ph2));
+}
+function bridgeAt(p){const s=secs[secAt(p)];return s&&s.type==='bridge';}
+// ---------- the straight world ----------
+let scroll=0;
+const Y=p=>ch-(p-scroll);
+function drawWorld(){
+  const cx=W/2,rl=cx-RW/2,rr_=cx+RW/2;
+  wx.save();wx.translate(0,scroll%128);wx.fillStyle=grassP;wx.fillRect(0,-128,W,ch+128);wx.restore();
+  wx.fillStyle='#7d6f52';wx.fillRect(rl-vw,0,vw,ch);wx.fillRect(rr_,0,vw,ch);
+  wx.save();wx.translate(0,scroll%64);wx.fillStyle=roadP;wx.fillRect(rl,-64,RW,ch+64);wx.restore();
+  wx.fillStyle='#e8e8e8';wx.fillRect(rl+6,0,3,ch);wx.fillRect(rr_-9,0,3,ch);
+  for(let p0=Math.floor((scroll-60)/56)*56;p0<scroll+ch+60;p0+=56){wx.fillStyle='#f2d34a';wx.fillRect(cx-2,Y(p0+28),4,28);}
+  for(let k=Math.floor((scroll-TILE)/TILE);k<=Math.ceil((scroll+ch)/TILE);k++){
+    wx.drawImage(hedgeTile,rl-vw-hw,Math.round(Y(k*TILE+TILE)),hw,TILE);wx.drawImage(hedgeTile,rr_+vw,Math.round(Y(k*TILE+TILE)),hw,TILE);}
+  for(let k=Math.floor((scroll-80)/170);k<=Math.floor((scroll+ch+80)/170);k++){
+    for(const side of[-1,1]){
+      const h1=hash(k*13+(side>0?7:3)+P.seed*31);if(h1>.62)continue;
+      const R=14+hash(k*17+side+P.seed)*20,p=k*170+hash(k*19+side*5+P.seed)*170;if(bridgeAt(p))continue;
+      const x=cx+side*(RW/2+vw+hw+R+4+hash(k*23+side*9+P.seed)*cw*.28),y=Y(p);
+      wx.fillStyle='rgba(0,0,0,.28)';wx.beginPath();wx.arc(x+R*.2,y+R*.25,R,0,6.283);wx.fill();
+      wx.fillStyle='#235c1f';wx.beginPath();wx.arc(x,y,R,0,6.283);wx.fill();
+      wx.fillStyle='#2f7a28';wx.beginPath();wx.arc(x-R*.2,y-R*.2,R*.7,0,6.283);wx.fill();
+      wx.fillStyle='#3d9433';wx.beginPath();wx.arc(x-R*.3,y-R*.3,R*.38,0,6.283);wx.fill();}
+  }
+  for(const s of secs){
+    if(s.type!=='bridge'||s.b<scroll-20||s.a>scroll+ch+20)continue;
+    const y0=Y(s.b),y1=Y(s.a);
+    wx.fillStyle='#6b5a3a';wx.fillRect(0,y0-10,W,10);wx.fillRect(0,y1,W,10);
+    wx.fillStyle='#2f6fa8';wx.fillRect(0,y0,W,y1-y0);
+    wx.fillStyle='#5b9bd0';
+    for(let p=Math.ceil(s.a/26)*26;p<s.b;p+=26){const hh=hash(p*3+P.seed);wx.fillRect(Math.round(hh*W),Math.round(Y(p)),14+Math.round(hh*18),2);}
+    const dl=rl-8,dw=RW+16;
+    wx.fillStyle='#8b6a3e';wx.fillRect(dl,y0,dw,y1-y0);
+    wx.fillStyle='#6b4e2a';for(let p=Math.ceil(s.a/12)*12;p<s.b;p+=12)wx.fillRect(dl,Math.round(Y(p)),dw,1);
+    wx.fillStyle='#4a3720';wx.fillRect(dl,y0,5,y1-y0);wx.fillRect(dl+dw-5,y0,5,y1-y0);
+  }
+}
+// ---------- shear + scale each strip onto the screen ----------
+function strips(){
+  const sh=P.strip;ctx.fillStyle='#10200c';ctx.fillRect(0,0,cw,ch);
+  for(let y=0;y<ch;y+=sh){
+    const hh=Math.min(sh,ch-y),p=scroll+ch-(y+hh/2),s=P.scale?scaleAt(p):1,d=P.shear?shiftAt(p):0;
+    const dx=Math.round(cw/2+d-(W/2)*s),dw=Math.round(W*s);
+    ctx.drawImage(wc,0,y,W,hh,dx,y,dw,hh);
+  }
+}
+function drawBike(){
+  const yb=Math.round(ch*.8),pb=scroll+ch-yb,d=P.shear?shiftAt(pb):0,sl=P.shear?(shiftAt(pb+25)-shiftAt(pb-25))/50:0;
+  ctx.save();ctx.translate(Math.round(cw/2+d),yb);ctx.rotate(Math.atan(sl));
+  ctx.fillStyle='rgba(0,0,0,.35)';ctx.fillRect(-5,-14,12,32);
+  ctx.fillStyle='#222';ctx.fillRect(-4,-17,8,34);ctx.fillStyle='#c42a1f';ctx.fillRect(-4,-7,8,9);
+  ctx.fillStyle='#e9c46a';ctx.fillRect(-5,-1,10,8);ctx.fillStyle='#d8d8d8';ctx.fillRect(-3,-6,6,6);
+  ctx.restore();
+}
+function drawBar(){
+  const span=3600,back=300,p0=scroll-back;bx.clearRect(0,0,cw,24);bx.fillStyle='#000';bx.fillRect(0,0,cw,24);
+  const col={open:'#4b5a46',twist:'#d98a1c',lane:'#d9402b',bridge:'#2f78c4'};
+  for(const s of secs){if(s.b<p0||s.a>p0+span)continue;const x0=(Math.max(s.a,p0)-p0)/span*cw,x1=(Math.min(s.b,p0+span)-p0)/span*cw;bx.fillStyle=col[s.type];bx.fillRect(x0,2,Math.max(1,x1-x0-1),14);}
+  bx.fillStyle='#fff';bx.fillRect(back/span*cw-1,0,3,20);
+  bx.fillStyle='#9ab090';bx.font='9px monospace';bx.fillText('PLAN AHEAD  grey open  orange twist  red lane  blue bridge',3,22);
+}
+// ---------- output ----------
+const KEYS=['twist','lane','laneW','ease','bend','wave','bridge','secLen','seed'];
+function out(){
+  const j={};for(const k of KEYS)j[k]=P[k];
+  const nice='ROAD TWIST LAB  twist '+P.twist+'% | laneway '+P.lane+'% | lane width '+P.laneW+'% | easing '+P.ease+' px | bend size '+P.bend+'% | bend length '+P.wave+' px | bridges '+P.bridge+'% | section length '+P.secLen+'% | seed '+P.seed;
+  $('out').value=nice+'\n'+JSON.stringify(j);
+}
+$('bCopy').onclick=async()=>{
+  const t=$('out').value;let ok=false;
+  try{await navigator.clipboard.writeText(t);ok=true;}catch(_){}
+  if(!ok){try{const ta=$('out');ta.removeAttribute('readonly');ta.select();ok=document.execCommand('copy');ta.setAttribute('readonly','');ta.blur();}catch(_){}}
+  const b=$('bCopy');b.textContent=ok?'COPIED':'COPY FAILED - SELECT THE TEXT';setTimeout(()=>{b.textContent='COPY SETTINGS';},1600);
+};
+let paused=false;
+$('bPause').onclick=()=>{paused=!paused;$('bPause').textContent=paused?'RESUME':'PAUSE';$('bPause').classList.toggle('on',paused);};
+$('bSeed').onclick=()=>{P.seed=1+Math.floor(Math.random()*99999);rngPh();sync();replan();};
+$('bDef').onclick=()=>{Object.assign(P,DEF);rngPh();sync();paintTg();replan();};
+function rngPh(){const r=mulberry(P.seed*7+1);ph1=r()*6.28;ph2=r()*6.28;}
+// ---------- loop ----------
+let last=0,fN=0,fT=0,msA=0;
+function frame(t){
+  const dt=Math.min(.1,(t-last)/1000||0);last=t;
+  if(!paused)scroll+=P.speed*dt;
+  ensure(scroll+ch+4000);
+  const t0=performance.now();drawWorld();strips();drawBike();drawBar();const ms=performance.now()-t0;msA+=(ms-msA)*.08;
+  fN++;fT+=dt;if(fT>=.5){$('st').textContent=Math.round(fN/fT)+' fps   draw '+msA.toFixed(1)+' ms   '+Math.ceil(ch/P.strip)+' strips   '+cw+'x'+ch;fN=0;fT=0;}
+  const pb=scroll+ch-Math.round(ch*.8),i=secAt(pb),s=secs[i];
+  const sc=P.scale?scaleAt(pb):1,sh_=P.shear?shiftAt(pb):0;
+  $('nowL').textContent=s.type.toUpperCase()+'   width '+Math.round(sc*100)+'%';
+  $('nowR').textContent='shift '+(sh_>=0?'+':'')+(sh_/cw*100).toFixed(1)+'%';
+  requestAnimationFrame(frame);
+}
+addEventListener('resize',resize);
+rngPh();sync();paintTg();resize();
+window.__LAB={P,secs:()=>secs,setScroll:v=>{scroll=v;},pause:()=>{paused=true;},replan,sync,shares};
+requestAnimationFrame(frame);
+})();
+</script></body></html>

@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Hazard Sound Lab</title>
+<style>
+:root{--g:max(60px,17vw);--bg:#14161a;--pn:#1e2127;--ln:#343a46;--tx:#e8e6df;--ac:#ffd23a;--mu:#9aa0ab}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.35 system-ui,-apple-system,sans-serif;max-width:100%;overflow-x:hidden}
+#pv{position:sticky;top:0;z-index:5;width:100%;height:24vh;height:24dvh;min-height:150px;background:#000;border-bottom:2px solid var(--ac);touch-action:pan-y;overflow:hidden}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block}
+#ov{position:absolute;right:6px;top:6px;display:flex;flex-direction:column;gap:6px;z-index:2}
+#ov button{width:70px;height:44px;border-radius:10px;border:1px solid #fff6;background:rgba(0,0,0,.5);color:#fff;font:700 11px system-ui;padding:0}
+#ov button.hot{background:#c0392b}
+#gut{position:fixed;left:0;top:0;bottom:0;width:var(--g);pointer-events:none;z-index:1;background:repeating-linear-gradient(180deg,#ffffff08 0 24px,#ffffff00 24px 48px);border-right:1px dashed #ffffff22}
+#gut span{position:absolute;left:50%;top:60%;transform:translate(-50%,-50%) rotate(-90deg);white-space:nowrap;color:#ffffff40;font-size:12px;letter-spacing:.15em}
+main{position:relative;z-index:2;padding:10px 12px 90px calc(var(--g) + 4px);max-width:100%}
+h1{font-size:15px;margin:2px 0 8px;color:var(--ac)}
+details{background:var(--pn);border:1px solid var(--ln);border-radius:12px;margin:0 0 10px;max-width:100%}
+summary{min-height:46px;display:flex;align-items:center;padding:0 12px;font-weight:700;cursor:pointer;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::after{content:'+';margin-left:auto;color:var(--ac);font-size:20px}
+details[open] summary::after{content:'\2212'}
+.bd{padding:2px 12px 12px;min-width:0}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 8px}
+.chip{min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--ln);background:#262a32;color:var(--tx);font:inherit;max-width:100%}
+.chip:active,.chip.on{background:var(--ac);color:#111;border-color:var(--ac)}
+.chip.sc{background:#2a3a2e;border-color:#3f6b4a}
+.sl{margin:6px 0}
+.sl label{display:flex;justify-content:space-between;gap:8px;color:var(--mu);font-size:13px}
+.sl label b{color:var(--tx);font-weight:600}
+.sl input{width:100%;height:44px;margin:0;touch-action:pan-y;accent-color:var(--ac)}
+.note{color:var(--mu);font-size:12.5px;margin:4px 0 6px;overflow-wrap:anywhere}
+.h{color:var(--ac);font-size:12px;margin:8px 0 0;text-transform:uppercase;letter-spacing:.08em}
+textarea{width:100%;min-height:200px;background:#0d0f12;color:#cfe;border:1px solid var(--ln);border-radius:10px;padding:8px;font:12px/1.35 ui-monospace,monospace}
+</style></head>
+<body>
+<div id="pv"><canvas id="cv"></canvas>
+ <div id="ov"><button id="bStop" type="button">STOP</button><button id="bAgain" type="button">AGAIN</button></div></div>
+<div id="gut"><span>swipe here to scroll</span></div>
+<main><h1>HAZARD SOUND LAB</h1><div id="ctl"></div></main>
+<script>
+(function(){
+'use strict';
+const $=s=>document.querySelector(s);
+/* ---------------- settings ---------------- */
+const P={master:.85,mph:40,pan:0,rnd:.4,
+ vol:{sheep:1,dog:1,impact:1,water:1,leaf:1},
+ sheep:{pitch:235,len:.85,rattle:.6,trem:14,vib:5.5,f1:740,f2:1850,f3:2600,flock:6},
+ dog:{generic:{pitch:400,len:.16,count:2,gap:.3},collie:{pitch:450,len:.17,count:3,gap:.28},grey:{pitch:540,len:.13,count:2,gap:.26},
+  f1:650,f2:1000,f3:1500,noise:.5,yelp:650,growl:100,chaseSec:6,chaseGap:.42},
+ imp:{weight:1,crack:1,ring:1,conePitch:880,coneSpacing:.28},
+ water:{splash:1,drops:4,wetSec:6,leafSec:2.5}};
+const DEF=JSON.parse(JSON.stringify(P));
+
+/* ---------------- synth helpers ---------------- */
+const nbufs=new WeakMap();
+function nbuf(c){let b=nbufs.get(c);if(!b){b=c.createBuffer(1,c.sampleRate*2,c.sampleRate);const d=b.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;nbufs.set(c,b)}return b}
+function nz(c,t,dur){const s=c.createBufferSource();s.buffer=nbuf(c);s.loop=true;s.start(t,Math.random()*1.5);s.stop(t+dur+.05);return s}
+function osc(c,type,f,t,dur){const o=c.createOscillator();o.type=type;o.frequency.setValueAtTime(f,t);o.start(t);o.stop(t+dur);return o}
+function flt(c,type,f,q){const b=c.createBiquadFilter();b.type=type;b.frequency.value=f;b.Q.value=q;return b}
+function gn(c,v){const g=c.createGain();g.gain.value=v==null?0:v;return g}
+function env(g,t,a,h,d,pk){pk=Math.max(pk,.0003);const p=g.gain;p.setValueAtTime(.0001,t);p.exponentialRampToValueAtTime(pk,t+a);p.setValueAtTime(pk,t+a+h);p.exponentialRampToValueAtTime(.0001,t+a+h+d)}
+const R=(o,k)=>1+(o.rnd||0)*(Math.random()-.5)*k;
+function voice(c,dest,o,vol){const g=gn(c,vol);let p=null;if(c.createStereoPanner){p=c.createStereoPanner();p.pan.value=Math.max(-1,Math.min(1,o.pan||0));g.connect(p);p.connect(dest)}else g.connect(dest);return{g,p}}
+
+/* ---- sheep ---- */
+function bleat(c,d,t,o,S){
+ const len=S.len*R(o,.6),f=S.pitch*R(o,.5);
+ const s=c.createOscillator();s.type='sawtooth';
+ s.frequency.setValueAtTime(f*1.18,t);s.frequency.linearRampToValueAtTime(f*1.05,t+len*.25);s.frequency.linearRampToValueAtTime(f*.88,t+len);
+ const vib=osc(c,'sine',S.vib,t,len+.1),vg=gn(c,f*.025);vib.connect(vg);vg.connect(s.frequency);
+ const am=gn(c,1),lfo=osc(c,'sine',S.trem*R(o,.4),t,len+.1),lg=gn(c,0);lg.gain.setValueAtTime(S.rattle*.5,t);lg.gain.linearRampToValueAtTime(S.rattle*.12,t+len*.55);lfo.connect(lg);lg.connect(am.gain);
+ const eg=gn(c,0);env(eg,t,.04,len*.62,len*.34,.55*(o.int==null?1:o.int));
+ s.connect(am);am.connect(eg);s.start(t);s.stop(t+len+.1);
+ const mix=gn(c,1);
+ for(const[fq,q,gv]of[[S.f1,7,1],[S.f2,7,1],[S.f3,6,.7]]){const b=flt(c,'bandpass',fq*R(o,.08),q),g=gn(c,gv);eg.connect(b);b.connect(g);g.connect(mix)}
+ const lp=flt(c,'lowpass',600,.7),lg2=gn(c,.25);eg.connect(lp);lp.connect(lg2);lg2.connect(mix);const hp=flt(c,'highpass',1200,.7),hg=gn(c,.22);eg.connect(hp);hp.connect(hg);hg.connect(mix);mix.connect(d);
+ const n=nz(c,t,len),nb=flt(c,'bandpass',1400,.8),ng=gn(c,0);env(ng,t,.03,len*.25,len*.2,S.rattle*.4*(o.int==null?1:o.int));n.connect(nb);nb.connect(ng);ng.connect(d);
+}
+function hoof(c,d,t,lvl){const n=nz(c,t,.06),f=flt(c,'lowpass',500+Math.random()*300,.7),g=gn(c,0);env(g,t,.004,.01,.04,lvl);n.connect(f);f.connect(g);g.connect(d)}
+function flock(c,dest,t,o){const n=P.sheep.flock;for(let i=0;i<n;i++){const dt=Math.random()*.7,pn=(Math.random()*2-1)*.8,v=voice(c,dest,{pan:pn},P.vol.sheep*.8);
+  bleat(c,v.g,t+dt,{rnd:Math.max(.5,P.rnd),int:.7+Math.random()*.3},P.sheep);}
+ const hv=voice(c,dest,{pan:0},P.vol.sheep);for(let i=0;i<16;i++)hoof(c,hv.g,t+.05+Math.random()*1.0,.12+Math.random()*.15)}
+
+/* ---- dogs ---- */
+function bark(c,d,t,o,S,dg){
+ const cnt=Math.round(S.count);for(let k=0;k<cnt;k++){
+  const tt=t+k*S.gap*R(o,.3),len=S.len*R(o,.3),f=S.pitch*R(o,.3),pk=.75*(1-.12*k)*(o.int==null?1:o.int);
+  const s=osc(c,'sawtooth',f*1.1,tt,len+.1);s.frequency.exponentialRampToValueAtTime(f*.78,tt+len);
+  const s2=osc(c,'square',f*1.007,tt,len+.1);s2.frequency.exponentialRampToValueAtTime(f*.78*1.007,tt+len);
+  const m=gn(c,1),m2=gn(c,.35);s.connect(m);s2.connect(m2);m2.connect(m);
+  const eg=gn(c,0);env(eg,tt,.012,len*.45,len*.6,pk);m.connect(eg);
+  const mix=gn(c,1);
+  for(const[fq,q,gv]of[[dg.f1,5,1],[dg.f2,6,.8],[dg.f3,6,.5]]){const b=flt(c,'bandpass',fq*R(o,.1),q),g=gn(c,gv);eg.connect(b);b.connect(g);g.connect(mix)}
+  mix.connect(d);
+  const n=nz(c,tt,.1),nb=flt(c,'bandpass',1100,.7),ng=gn(c,0);env(ng,tt,.004,.01,.07,dg.noise*.4*pk);n.connect(nb);nb.connect(ng);ng.connect(d)}}
+function yelp(c,d,t,o){const dg=P.dog,len=.26,f=dg.yelp;
+ const s=osc(c,'sawtooth',f,t,len+.1);s.frequency.linearRampToValueAtTime(f*1.9,t+.07);s.frequency.linearRampToValueAtTime(f*1.2,t+len);
+ const v=osc(c,'sine',18,t,len+.1),vg=gn(c,f*.05);v.connect(vg);vg.connect(s.frequency);
+ const eg=gn(c,0);env(eg,t,.01,.12,.13,.6);s.connect(eg);
+ const b1=flt(c,'bandpass',1400,2),b2=flt(c,'bandpass',2600,3),g1=gn(c,1),g2=gn(c,.4);eg.connect(b1);eg.connect(b2);b1.connect(g1);b2.connect(g2);g1.connect(d);g2.connect(d)}
+function growl(c,d,t,o){const len=.7,f=P.dog.growl*R(o,.2);
+ const s=osc(c,'sawtooth',f,t,len+.1);s.frequency.linearRampToValueAtTime(f*.85,t+len);
+ const am=gn(c,.6),lf=osc(c,'sine',28,t,len+.1),lg=gn(c,.4);lf.connect(lg);lg.connect(am.gain);
+ const eg=gn(c,0);env(eg,t,.12,len*.5,len*.4,.55);s.connect(am);am.connect(eg);
+ const f1=flt(c,'lowpass',900,1);eg.connect(f1);f1.connect(d);
+ const n=nz(c,t,len),nb=flt(c,'bandpass',500,1),ng=gn(c,0);env(ng,t,.1,len*.5,len*.4,.16);n.connect(nb);nb.connect(ng);ng.connect(d)}
+function chase(c,dest,t,o,dogKey){
+ const S=P.dog[dogKey],side=o.pan!=null&&o.pan!==0?o.pan:(Math.random()<.5?-.9:.9);
+ const v=voice(c,dest,{pan:side},P.vol.dog);const pn=v.p;
+ growl(c,v.g,t,{rnd:P.rnd});
+ let tt=t+.55;const end=t+.55+P.dog.chaseSec;
+ while(tt<end){bark(c,v.g,tt,{rnd:P.rnd,int:.65+Math.random()*.35},{pitch:S.pitch,len:S.len,count:1,gap:S.gap},P.dog);tt+=P.dog.chaseGap*R({rnd:P.rnd},.5)}
+ if(pn){pn.pan.setValueAtTime(side,t);pn.pan.linearRampToValueAtTime(side*.15,t+Math.min(2.2,P.dog.chaseSec))}
+ return end}
+
+/* ---- impacts ---- */
+function thump(c,d,t,f0,f1,len,pk,type){const o=osc(c,type||'sine',f0,t,len+.05);o.frequency.exponentialRampToValueAtTime(f1,t+len);const g=gn(c,0);env(g,t,.004,.01,len,pk);o.connect(g);g.connect(d)}
+function click(c,d,t,type,f,q,len,pk){const n=nz(c,t,len),b=flt(c,type,f,q),g=gn(c,0);env(g,t,.002,.004,len,pk);n.connect(b);b.connect(g);g.connect(d)}
+function ring(c,d,t,fr,dec,pk,type){for(const f of fr){const o=osc(c,type||'triangle',f,t,dec+.05),g=gn(c,0);env(g,t,.003,.005,dec,pk/fr.length*1.6);o.connect(g);g.connect(d)}}
+function rustle(c,d,t,dur,f,pk){const n=nz(c,t,dur),b=flt(c,'bandpass',f,.9),g=gn(c,0);n.connect(b);b.connect(g);g.connect(d);
+ g.gain.setValueAtTime(0,t);const steps=Math.max(2,Math.floor(dur/.025));for(let i=0;i<steps;i++){const e=1-i/steps;g.gain.linearRampToValueAtTime(Math.random()*pk*e,t+(i+1)*.025)}g.gain.linearRampToValueAtTime(0,t+dur+.03)}
+function impact(c,d,t,kind,o){
+ const I=P.imp,w=I.weight,it=o.int==null?.5:o.int,lv=(.55+.45*it),pf=(1.12-.2*it)/Math.sqrt(w);
+ switch(kind){
+ case 'bin':thump(c,d,t,150*pf,55*pf,.16,.8*lv);click(c,d,t,'lowpass',2000,.7,.03,.4*lv*I.crack);ring(c,d,t,[310,515,845].map(x=>x*R(o,.1)),.28,.2*lv*I.ring,'triangle');break;
+ case 'rock':thump(c,d,t,100*pf,44*pf,.22,.9*lv);click(c,d,t,'lowpass',900,.7,.06,.5*lv*I.crack);click(c,d,t+.09,'bandpass',2200,3,.02,.12*I.crack);break;
+ case 'barrier':thump(c,d,t,115*pf,50*pf,.2,.85*lv);click(c,d,t,'bandpass',1800,1,.04,.35*lv*I.crack);ring(c,d,t,[190,330,610].map(x=>x*R(o,.08)),.42,.24*lv*I.ring,'triangle');break;
+ case 'roadworks':impact(c,d,t,'barrier',o);thump(c,d,t+.07,95*pf,45*pf,.12,.5*lv);ring(c,d,t+.07,[250,470].map(x=>x*R(o,.1)),.2,.12*lv*I.ring,'triangle');break;
+ case 'branch':click(c,d,t,'highpass',2500,.7,.035,.75*lv*I.crack);click(c,d,t+.03,'highpass',2800,.7,.03,.5*lv*I.crack);click(c,d,t+.07,'highpass',3200,.7,.03,.35*lv*I.crack);thump(c,d,t,170*pf,90*pf,.08,.35*lv);rustle(c,d,t+.05,.28,3000,.28*lv);break;
+ case 'pine':click(c,d,t,'highpass',3000,.7,.03,.45*lv*I.crack);click(c,d,t+.035,'highpass',3400,.7,.03,.3*lv*I.crack);thump(c,d,t,190*pf,100*pf,.07,.28*lv);rustle(c,d,t+.03,.42,4800,.34*lv);break;
+ case 'tyres':thump(c,d,t,175*pf,85*pf,.11,.6*lv);click(c,d,t,'lowpass',700,.7,.05,.4*lv);thump(c,d,t+.05,260*pf,190*pf,.09,.15*lv);break;
+ case 'cone':{const f=I.conePitch*R(o,.5);const q=osc(c,'triangle',f,t,.12);q.frequency.exponentialRampToValueAtTime(f*.55,t+.07);const g=gn(c,0);env(g,t,.002,.006,.065,.5*lv);q.connect(g);g.connect(d);
+  click(c,d,t,'bandpass',2600*R(o,.3),2,.025,.35*lv*I.crack);click(c,d,t,'bandpass',700,8,.08,.15*lv);break}
+ case 'pothole':thump(c,d,t,85*pf,40*pf,.28,.95*lv);click(c,d,t,'lowpass',1200,.8,.05,.4*lv*I.crack);
+  {const s=osc(c,'sine',190,t+.03,.6);s.frequency.setValueAtTime(190,t+.03);s.frequency.exponentialRampToValueAtTime(110,t+.12);s.frequency.exponentialRampToValueAtTime(150,t+.22);s.frequency.exponentialRampToValueAtTime(105,t+.5);
+   const g=gn(c,0);env(g,t+.03,.01,.05,.5,.24*lv*I.ring);s.connect(g);g.connect(d)}
+  click(c,d,t+.05,'bandpass',400,2,.12,.2*lv);break}}
+function splash(c,d,t,o){const W=P.water;
+ const n=nz(c,t,.4),b=flt(c,'bandpass',500,1.2);b.frequency.setValueAtTime(500,t);b.frequency.exponentialRampToValueAtTime(2800,t+.12);const g=gn(c,0);env(g,t,.01,.04,.3,.6*W.splash);n.connect(b);b.connect(g);g.connect(d);
+ const n2=nz(c,t,.3),l=flt(c,'lowpass',800,.8),g2=gn(c,0);env(g2,t,.01,.02,.2,.5*W.splash);n2.connect(l);l.connect(g2);g2.connect(d);
+ for(let i=0;i<Math.round(W.drops);i++){const tt=t+.1+Math.random()*.35,f=1800+Math.random()*1400,s=osc(c,'sine',f,tt,.06);s.frequency.exponentialRampToValueAtTime(f*1.5,tt+.03);const gg=gn(c,0);env(gg,tt,.002,.005,.04,.09*W.splash);s.connect(gg);gg.connect(d)}}
+function wetBed(c,d,t,dur){const n=nz(c,t,dur+2),l=flt(c,'lowpass',2500,.7),h=flt(c,'highpass',400,.7),g=gn(c,0);
+ g.gain.setValueAtTime(.0001,t);g.gain.exponentialRampToValueAtTime(.09*P.water.splash,t+.35);g.gain.setValueAtTime(.09*P.water.splash,t+dur);g.gain.exponentialRampToValueAtTime(.0001,t+dur+1.5);n.connect(l);l.connect(h);h.connect(g);g.connect(d)}
+
+/* ---------------- sound table ---------------- */
+const NORM={"sheep": 2.53, "flock": 2.2, "dog_generic": 2.04, "dog_collie": 1.99, "dog_grey": 1.5, "alert": 1.39, "yelp": 2.04, "chase": 1.99, "coneline": 2.0, "bin": 2.36, "rock": 2.3, "barrier": 1.8, "roadworks": 1.83, "branch": 1.87, "pine": 3.22, "tyres": 3.42, "cone": 4.61, "pothole": 2.21, "splash": 3.89, "wet": 5, "leaves": 5, "hooves": 5};
+const IMP=['bin','rock','barrier','roadworks','branch','pine','tyres','cone','pothole'];
+function pctInt(){const m=P.mph,pct=Math.min(8,2+Math.max(0,Math.floor((m-20)/10)));return(pct-2)/6}
+const SND={
+ sheep:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.sheep);bleat(c,v.g,t,o,P.sheep);return t+P.sheep.len+.2},
+ flock:(c,dest,t,o)=>{flock(c,dest,t,o);return t+2},
+ dog_generic:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.dog);bark(c,v.g,t,o,P.dog.generic,P.dog);return t+P.dog.generic.count*P.dog.generic.gap+.3},
+ dog_collie:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.dog);bark(c,v.g,t,o,P.dog.collie,P.dog);return t+P.dog.collie.count*P.dog.collie.gap+.3},
+ dog_grey:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.dog);bark(c,v.g,t,o,P.dog.grey,P.dog);return t+P.dog.grey.count*P.dog.grey.gap+.3},
+ alert:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.dog);growl(c,v.g,t,o);bark(c,v.g,t+.85,{rnd:o.rnd,int:.8},{pitch:P.dog.generic.pitch,len:P.dog.generic.len,count:1,gap:.3},P.dog);return t+1.3},
+ yelp:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.dog);yelp(c,v.g,t,o);return t+.5},
+ chase:(c,dest,t,o)=>{const e=chase(c,dest,t,o,'generic');const v=voice(c,dest,{pan:0},P.vol.dog);yelp(c,v.g,e+.1,o);return e+.6},
+ chase_grey:(c,dest,t,o)=>{const e=chase(c,dest,t,o,'grey');return e+.3},
+ coneline:(c,dest,t,o)=>{const n=8,L=130,spd=Math.max(5,P.mph*5),iv=P.imp.coneSpacing*L/spd;for(let i=0;i<n;i++){const v=voice(c,dest,{pan:o.pan},P.vol.impact);impact(c,v.g,t+i*iv,'cone',{rnd:Math.max(.5,P.rnd),int:pctInt()})}return t+n*iv+.3},
+ splash:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.water);splash(c,v.g,t,o);return t+.8},
+ wet:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.water);wetBed(c,v.g,t,P.water.wetSec);return t+P.water.wetSec+1.6},
+ leaves:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.leaf);rustle(c,v.g,t,P.water.leafSec,3400,.25);rustle(c,v.g,t,P.water.leafSec,1500,.1);return t+P.water.leafSec+.1},
+ hooves:(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.sheep);for(let i=0;i<16;i++)hoof(c,v.g,t+Math.random()*1.0,.12+Math.random()*.15);return t+1.1}
+};
+IMP.forEach(k=>{SND[k]=(c,dest,t,o)=>{const v=voice(c,dest,o,P.vol.impact);impact(c,v.g,t,k,{rnd:o.rnd,int:pctInt(),pan:o.pan});return t+.7}});
+
+/* ---------------- audio graph ---------------- */
+let AC=null,master=null,an=null,active=[],lastName='',peakHold=0;
+function graph(c,withAn){const m=c.createGain();m.gain.value=P.master;const lim=c.createDynamicsCompressor();lim.threshold.value=-3;lim.knee.value=0;lim.ratio.value=20;lim.attack.value=.002;lim.release.value=.1;
+ m.connect(lim);lim.connect(c.destination);let a=null;if(withAn){a=c.createAnalyser();a.fftSize=1024;m.connect(a)}return{m,a}}
+function ensure(){if(!AC){AC=new (window.AudioContext||window.webkitAudioContext)();const g=graph(AC,true);master=g.m;an=g.a}if(AC.state==='suspended')AC.resume();return AC}
+function play(name){const c=ensure();lastName=name;const bus=c.createGain();bus.gain.value=NORM[name]||1;bus.connect(master);const end=SND[name](c,bus,c.currentTime+.03,{pan:P.pan,rnd:P.rnd});active.push(bus);
+ setTimeout(()=>{try{bus.disconnect()}catch(e){}active=active.filter(x=>x!==bus)},Math.max(500,(end-c.currentTime)*1000+2500))}
+function stopAll(){if(!AC)return;const t=AC.currentTime;active.forEach(b=>{try{b.gain.cancelScheduledValues(t);b.gain.setTargetAtTime(0,t,.03)}catch(e){}});setTimeout(()=>{active.forEach(b=>{try{b.disconnect()}catch(e){}});active=[]},300)}
+async function offline(name,secs){const sr=44100,c=new OfflineAudioContext(2,sr*(secs||3),sr),g=graph(c,false);const bus=c.createGain();bus.gain.value=NORM[name]||1;bus.connect(g.m);SND[name](c,bus,.02,{pan:P.pan,rnd:0});const b=await c.startRendering();return[Array.from(b.getChannelData(0)),Array.from(b.getChannelData(1))]}
+
+/* ---------------- scope ---------------- */
+const cv=$('#cv'),ctx=cv.getContext('2d');let W_=300,H_=150,DPR=Math.max(1,Math.min(3,Math.round(devicePixelRatio||1)));
+function sz(){const p=$('#pv'),w=p.clientWidth,h=p.clientHeight;if(w!==W_||h!==H_||cv.width!==w*DPR){W_=w;H_=h;cv.width=w*DPR;cv.height=h*DPR}}
+const buf=new Float32Array(1024);
+function frame(){sz();ctx.setTransform(DPR,0,0,DPR,0,0);ctx.fillStyle='#07090c';ctx.fillRect(0,0,W_,H_);
+ ctx.strokeStyle='#1f2630';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,H_/2);ctx.lineTo(W_,H_/2);ctx.stroke();
+ let pk=0;if(an){an.getFloatTimeDomainData(buf);ctx.strokeStyle='#ffd23a';ctx.lineWidth=1.5;ctx.beginPath();const usable=W_-84;
+  for(let i=0;i<buf.length;i++){const x=i/buf.length*usable,y=H_/2-buf[i]*H_*.42;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);pk=Math.max(pk,Math.abs(buf[i]))}ctx.stroke()}
+ peakHold=Math.max(pk,peakHold*.985);
+ ctx.fillStyle='#fff';ctx.font='700 12px system-ui';ctx.textAlign='left';ctx.fillText(lastName?('last: '+lastName):'tap any sound below',8,16);
+ ctx.fillStyle=peakHold>.95?'#ff5a4a':peakHold>.75?'#ffd23a':'#6dff9a';ctx.fillText('peak '+peakHold.toFixed(2),8,H_-8);
+ ctx.fillStyle='#222';ctx.fillRect(8,H_-24,Math.max(10,W_-96),5);ctx.fillStyle=peakHold>.95?'#ff5a4a':'#6dff9a';ctx.fillRect(8,H_-24,Math.min(1,peakHold)*Math.max(10,W_-96),5);
+ requestAnimationFrame(frame)}
+
+/* ---------------- UI ---------------- */
+const refreshers=[];
+function el(t,a,...k){const e=document.createElement(t);for(const x in a)x==='class'?e.className=a[x]:e[x]=a[x];k.forEach(c=>e.append(c));return e}
+function sec(title,open){const d=el('details',{open:!!open},el('summary',{},title)),b=el('div',{class:'bd'});d.append(b);$('#ctl').append(d);return b}
+function btns(par,list){const w=el('div',{class:'chips'});list.forEach(([n,l,cls])=>{const b=el('button',{class:'chip'+(cls?' '+cls:''),type:'button',textContent:l});b.onclick=()=>play(n);w.append(b)});par.append(w)}
+function slider(par,label,min,max,step,get,set,fmt){const f=fmt||(v=>v),b=el('b',{}),inp=el('input',{type:'range',min,max,step});const w=el('div',{class:'sl'},el('label',{},label,b),inp);
+ const rn=()=>{inp.value=get();b.textContent=f(+get())};inp.oninput=()=>{set(+inp.value);b.textContent=f(+inp.value);exp()};par.append(w);refreshers.push(rn);rn()}
+const pc=v=>Math.round(v*100)+'%',hz=v=>v+' Hz',sx=v=>(+v).toFixed(2)+'s',x2=v=>(+v).toFixed(2)+'x';
+let b=sec('Quick play',true);
+b.append(el('div',{class:'h'},'Sheep'));btns(b,[['sheep','Bleat'],['flock','Flock scatter','sc'],['hooves','Hooves']]);
+b.append(el('div',{class:'h'},'Dogs'));btns(b,[['dog_generic','Generic'],['dog_collie','Collie'],['dog_grey','Greyhound'],['alert','Alert growl'],['yelp','Bite yelp'],['chase','Chase (generic)','sc'],['chase_grey','Chase (greyhound)','sc']]);
+b.append(el('div',{class:'h'},'Hard hits'));btns(b,[['bin','Bin'],['rock','Rock'],['barrier','Barrier'],['roadworks','Roadworks'],['branch','Branch'],['pine','Pine'],['pothole','Pothole']]);
+b.append(el('div',{class:'h'},'Soft hits'));btns(b,[['tyres','Tyre stack'],['cone','One cone'],['coneline','Cone line (each cone)','sc']]);
+b.append(el('div',{class:'h'},'Water & leaves'));btns(b,[['splash','Puddle splash'],['wet','Wet state'],['leaves','Leaves']]);
+b.append(el('div',{class:'note'},'Tap a sound once to start the audio. STOP cuts everything. Headphones help for the left/right panning.'));
+b=sec('Test conditions',true);
+slider(b,'Bike speed for hit strength (mph)',0,80,1,()=>P.mph,v=>{P.mph=v},v=>v+' mph (hit '+(2+Math.round(pctInt()*6))+'%)');
+slider(b,'Pan (left / right)',-1,1,.1,()=>P.pan,v=>{P.pan=v},v=>v<0?'left '+Math.abs(v).toFixed(1):v>0?'right '+v.toFixed(1):'centre');
+slider(b,'Humanize (random variation)',0,1,.05,()=>P.rnd,v=>{P.rnd=v},pc);
+slider(b,'Master volume',.1,1.2,.05,()=>P.master,v=>{P.master=v;if(master)master.gain.value=v},pc);
+b=sec('Mix: category levels');
+slider(b,'Sheep',0,2,.05,()=>P.vol.sheep,v=>{P.vol.sheep=v},pc);slider(b,'Dogs',0,2,.05,()=>P.vol.dog,v=>{P.vol.dog=v},pc);
+slider(b,'Impacts',0,2,.05,()=>P.vol.impact,v=>{P.vol.impact=v},pc);slider(b,'Water',0,2,.05,()=>P.vol.water,v=>{P.vol.water=v},pc);slider(b,'Leaves',0,2,.05,()=>P.vol.leaf,v=>{P.vol.leaf=v},pc);
+b=sec('Sheep voice');btns(b,[['sheep','Play bleat'],['flock','Play flock','sc']]);
+b.append(el('div',{class:'note'},'Matched to your recording: buzzy 200-300 Hz voice, nasal peaks near 750 Hz and 1850 Hz, a rattly breathy start, then a clean falling tone.'));
+slider(b,'Pitch',150,380,1,()=>P.sheep.pitch,v=>{P.sheep.pitch=v},hz);slider(b,'Length',.3,1.5,.01,()=>P.sheep.len,v=>{P.sheep.len=v},sx);
+slider(b,'Rattly start',0,1,.02,()=>P.sheep.rattle,v=>{P.sheep.rattle=v},pc);slider(b,'Rattle speed',4,40,1,()=>P.sheep.trem,v=>{P.sheep.trem=v},hz);
+slider(b,'Vibrato speed',0,12,.5,()=>P.sheep.vib,v=>{P.sheep.vib=v},hz);
+slider(b,'Nasal peak 1',500,1000,10,()=>P.sheep.f1,v=>{P.sheep.f1=v},hz);slider(b,'Nasal peak 2',1400,2400,10,()=>P.sheep.f2,v=>{P.sheep.f2=v},hz);slider(b,'Bright peak 3',2000,3400,10,()=>P.sheep.f3,v=>{P.sheep.f3=v},hz);
+slider(b,'Sheep in a scatter',1,12,1,()=>P.sheep.flock,v=>{P.sheep.flock=v});
+b=sec('Dog voices');btns(b,[['dog_generic','Generic'],['dog_collie','Collie'],['dog_grey','Greyhound'],['alert','Alert'],['yelp','Yelp'],['chase','Chase','sc']]);
+b.append(el('div',{class:'note'},'Matched to your compilation: each bark about 0.12-0.18 s, fast attack, energy 400-1500 Hz around 350-450 Hz pitch, pairs of barks about 0.3 s apart.'));
+for(const[k,l]of[['generic','Generic'],['collie','Collie'],['grey','Greyhound']]){b.append(el('div',{class:'h'},l));
+ slider(b,l+' pitch',200,800,5,()=>P.dog[k].pitch,v=>{P.dog[k].pitch=v},hz);slider(b,l+' bark length',.06,.3,.01,()=>P.dog[k].len,v=>{P.dog[k].len=v},sx);
+ slider(b,l+' barks in a burst',1,5,1,()=>P.dog[k].count,v=>{P.dog[k].count=v});slider(b,l+' gap between barks',.15,.6,.01,()=>P.dog[k].gap,v=>{P.dog[k].gap=v},sx)}
+b.append(el('div',{class:'h'},'All dogs'));
+slider(b,'Mouth shape 1',400,900,10,()=>P.dog.f1,v=>{P.dog.f1=v},hz);slider(b,'Mouth shape 2',700,1400,10,()=>P.dog.f2,v=>{P.dog.f2=v},hz);slider(b,'Mouth shape 3',1100,2200,10,()=>P.dog.f3,v=>{P.dog.f3=v},hz);
+slider(b,'Bark rasp (noise)',0,1,.02,()=>P.dog.noise,v=>{P.dog.noise=v},pc);slider(b,'Yelp pitch',400,1000,10,()=>P.dog.yelp,v=>{P.dog.yelp=v},hz);slider(b,'Growl pitch',60,180,1,()=>P.dog.growl,v=>{P.dog.growl=v},hz);
+slider(b,'Chase barking length',2,12,.5,()=>P.dog.chaseSec,v=>{P.dog.chaseSec=v},v=>v+' s');slider(b,'Gap between chase barks',.2,.9,.02,()=>P.dog.chaseGap,v=>{P.dog.chaseGap=v},sx);
+b=sec('Impacts');btns(b,[['bin','Bin'],['rock','Rock'],['barrier','Barrier'],['roadworks','Roadworks'],['branch','Branch'],['pine','Pine'],['tyres','Tyres'],['cone','Cone'],['coneline','Cone line','sc'],['pothole','Pothole']]);
+b.append(el('div',{class:'note'},'Hit strength follows the speed slider: 2% hit is the quietest, 8% the loudest and deepest. Every cone in a line plays its own tick, even though the damage only counts once.'));
+slider(b,'Weight (lower = heavier)',.5,2,.05,()=>P.imp.weight,v=>{P.imp.weight=v},x2);slider(b,'Crack / click',0,2,.05,()=>P.imp.crack,v=>{P.imp.crack=v},pc);slider(b,'Metal ring',0,2,.05,()=>P.imp.ring,v=>{P.imp.ring=v},pc);
+slider(b,'Cone pitch',400,1600,10,()=>P.imp.conePitch,v=>{P.imp.conePitch=v},hz);slider(b,'Cone spacing in line (bike lengths)',.12,.6,.01,()=>P.imp.coneSpacing,v=>{P.imp.coneSpacing=v},x2);
+b=sec('Water & leaves');btns(b,[['splash','Splash'],['wet','Wet state'],['leaves','Leaves']]);
+slider(b,'Splash strength',0,2,.05,()=>P.water.splash,v=>{P.water.splash=v},pc);slider(b,'Droplets',0,10,1,()=>P.water.drops,v=>{P.water.drops=v});
+slider(b,'Wet hiss test length',2,20,1,()=>P.water.wetSec,v=>{P.water.wetSec=v},v=>v+' s');slider(b,'Leaves test length',1,8,.5,()=>P.water.leafSec,v=>{P.water.leafSec=v},v=>v+' s');
+b=sec('Reset & export');
+const rb=el('button',{class:'chip',type:'button',textContent:'Reset all to defaults'});rb.onclick=()=>{const d=JSON.parse(JSON.stringify(DEF));for(const k in d)P[k]=d[k];refreshers.forEach(f=>f());exp()};b.append(rb);
+const ta=el('textarea',{readOnly:true});b.append(ta);
+const cb=el('button',{class:'chip',type:'button',textContent:'Copy settings'});cb.style.marginTop='8px';
+cb.onclick=()=>{ta.select();ta.setSelectionRange(0,1e9);let ok=false;try{ok=document.execCommand('copy')}catch(e){}if(!ok&&navigator.clipboard)navigator.clipboard.writeText(ta.value).catch(()=>{});cb.textContent='Copied!';setTimeout(()=>cb.textContent='Copy settings',1400)};b.append(cb);
+function exp(){ta.value=JSON.stringify({soundLab:1,...P},null,1)}
+$('#bStop').onclick=stopAll;$('#bAgain').onclick=()=>{if(lastName)play(lastName)};
+window.__snd={P,offline,SND,play,exp};
+exp();requestAnimationFrame(frame);
+})();
+</script>
+</body></html>
